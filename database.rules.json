@@ -1,0 +1,41 @@
+{
+  "rules": {
+    ".read": false,
+    ".write": false,
+    "workers": {
+      ".read": "auth.token.email === 'cghanshyam787@gmail.com'",
+      ".write": "auth.token.email === 'cghanshyam787@gmail.com'",
+      "$uid": { ".read": "auth.uid === $uid" }
+    },
+    "payments": {
+      ".read": "auth.token.email === 'cghanshyam787@gmail.com'",
+      ".write": "auth.token.email === 'cghanshyam787@gmail.com'",
+      "$uid": { ".read": "auth.uid === $uid" }
+    },
+    "leaves": {
+      ".read": "auth.token.email === 'cghanshyam787@gmail.com'",
+      ".write": "auth.token.email === 'cghanshyam787@gmail.com'",
+      "$uid": { ".read": "auth.uid === $uid" }
+    },
+    "tasks": {
+      ".read": "auth.token.email === 'cghanshyam787@gmail.com'",
+      ".write": "auth.token.email === 'cghanshyam787@gmail.com'",
+      "$uid": {
+        ".read": "auth.uid === $uid",
+        "$tid": {
+          ".write": "auth.uid === $uid && data.exists() && newData.child('text').val() === data.child('text').val() && newData.child('done').isBoolean()"
+        }
+      }
+    },
+    "requests": {
+      ".read": "auth.token.email === 'cghanshyam787@gmail.com'",
+      ".write": "auth.token.email === 'cghanshyam787@gmail.com'",
+      "$uid": {
+        ".read": "auth.uid === $uid",
+        "$rid": {
+          ".write": "auth.uid === $uid && ((!data.exists() && newData.child('status').val() === 'pending') || (data.exists() && data.child('status').val() === 'pending' && !newData.exists()))"
+        }
+      }
+    }
+  }
+}
