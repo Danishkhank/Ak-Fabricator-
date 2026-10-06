@@ -372,3 +372,19 @@ body {
 
 }
 
+
+/* ---- Login: interior / blueprint look ---- */
+.login { max-width: 400px; margin: 4vh auto; padding: 16px; }
+.hero { text-align: center; margin-bottom: 18px; }
+.bp { width: 100%; max-width: 330px; filter: drop-shadow(0 10px 40px rgba(216, 181, 106, .2)); }
+.bp .glare { animation: glare 5.5s ease-in-out infinite; }
+@keyframes glare { 0%, 15% { transform: translateX(60px); } 75%, 100% { transform: translateX(300px); } }
+.brand { font: 700 44px/1 'Cormorant Garamond', serif; color: var(--gold); letter-spacing: 1px; margin-top: 4px; }
+.brand small { display: block; font: 600 11px Manrope, sans-serif; letter-spacing: 5px; color: var(--mut); margin-top: 8px; text-transform: uppercase; }
+.chips { display: flex; gap: 6px; justify-content: center; margin-top: 14px; }
+.chips span { border: 1px solid var(--ln); border-radius: 99px; padding: 3px 12px; font-size: 12px; color: var(--mut); }
+
+/* ---- Worker photo ---- */
+.av { position: relative; overflow: hidden; }
+.av img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.av.lg { width: 68px; height: 68px; border-radius: 20px; font-size: 30px; }
