@@ -25,7 +25,7 @@ const errm = e => ({
     'auth/invalid-credential': 'Email ya password galat hai.', 'auth/email-already-in-use': 'Ye email pehle se hai.', 'auth/weak-password': 'Password kam se kam 6 akshar ka rakhein.', 'auth/network-request-failed': 'Internet check karein.'
 }[e.code] || (e.code === 'PERMISSION_DENIED' ? 'Permission nahi hai (rules check karein).' : e.message));
 const S = {
-    user: null, owner: false, ready: false, workers: {}, pay: {}, leave: {}, req: {}, task: {}, me: undefined, tab: 'home', sel: null, month: td().slice(0, 7)
+    user: null, owner: false, ready: false, workers: {}, pay: {}, leave: {}, req: {}, lreq: {}, task: {}, me: undefined, tab: 'home', sel: null, month: td().slice(0, 7)
 };
 if (cfg.apiKey.startsWith('PASTE')) {
     document.getElementById('app').innerHTML = '<div class="login gl"><h2 class="gd">Setup baaki hai</h2><p class="note">index.html ke upar SETTINGS mein apna Firebase config, owner email aur phone daaliye.</p></div>';
@@ -39,7 +39,7 @@ else {
     })).sort((a, b) => String(b.date || b.at).localeCompare(String(a.date || a.at)));
     const W = uid => ({ uid, ...S.workers[uid] });
     function calc(w, m) {
-        const [y, mo] = m.split('-').map(Number), dim = new Date(y, mo, 0).getDate(), per = w.salary / dim;
+        const [y, mo] = m.split('-').map(Number), per = w.salary / DAYS_IN_MONTH;
         const L = un('leave', w.uid).filter(l => l.date.startsWith(m)), all = L.reduce((a, l) => a + l.days, 0), u = L.filter(l => !l.paid).reduce((a, l) => a + l.days, 0);
         const cut = Math.round(per * u), net = w.salary - cut, paid = un('pay', w.uid).filter(p => p.date.startsWith(m)).reduce((a, p) => a + p.amount, 0);
         return {
@@ -57,7 +57,11 @@ else {
     }
     const site = () => location.origin + location.pathname;
     /* ---- modal helpers ---- */
-    const modal = h => $('#modal').innerHTML = h ? `<div class="ov"><div class="mod">${h}</div></div>` : '';
+    const modal = h => {
+        $('#modal').innerHTML = h ? `<div class="ov"><div class="mod">${h}</div></div>` : '';
+        if (!h)
+            setTimeout(checkPopups, 500);
+    };
     const ask = (t, rows, ok, danger) => new Promise(r => {
         modal(`<h3>${esc(t)}</h3><table class="dt">${rows.map(x => `<tr><td class="note">${esc(x[0])}</td><td>${esc(x[1])}</td></tr>`).join('')}</table><div class="row"><button class="b s f" id="cn">Wapas</button><button class="b ${danger ? 'd' : ''} f" id="cy">${esc(ok)}</button></div>`);
         $('#cn').onclick = () => {
@@ -97,11 +101,11 @@ else {
         refs.forEach(([r, h]) => r.off('value', h));
         refs = [];
         Object.assign(S, {
-            user: u, owner: !!u && u.email.toLowerCase() === OWNER_EMAIL.toLowerCase(), workers: {}, pay: {}, leave: {}, req: {}, task: {}, me: undefined, tab: 'home', sel: null, ready: true
+            user: u, owner: !!u && u.email.toLowerCase() === OWNER_EMAIL.toLowerCase(), workers: {}, pay: {}, leave: {}, req: {}, lreq: {}, task: {}, me: undefined, tab: 'home', sel: null, ready: true
         });
         if (u) {
             const nodes = {
-                pay: 'payments', leave: 'leaves', req: 'requests', task: 'tasks'
+                pay: 'payments', leave: 'leaves', req: 'requests', lreq: 'leaveRequests', task: 'tasks'
             };
             if (S.owner) {
                 listen('workers', v => S.workers = v);
@@ -131,8 +135,48 @@ else {
         pending: 'Intezaar', paid: 'Mil gaye', rejected: 'Reject'
     }[r.status]}</span>${o ? `<div class="note"><b>${esc(S.workers[r.uid]?.name || '')}</b> · ` : '<div class="note">'}${new Date(r.at).toLocaleDateString('en-IN')} · ${esc(r.note || '')}</div></div></div>${o && r.status === 'pending' ? `<div class="row" style="margin-top:8px;justify-content:flex-end"><button class="b d sm" data-a="rej" data-u="${r.uid}" data-id="${r.id}">Reject</button><button class="b sm" data-a="payreq" data-u="${r.uid}" data-id="${r.id}">Pay karein</button></div>` : ''}</div>`;
     const sumCards = c => `<div class="grid">${stat('Mahine ki salary', inr(c.net + c.cut))}${stat(`Chhutti kati (${c.u} din)`, '− ' + inr(c.cut), c.cut ? 'bad' : '')}${stat('Ab tak mile', inr(c.paid), 'ok')}${stat(c.baaki < 0 ? 'Zyada diye' : 'Baaki', inr(Math.abs(c.baaki)), c.baaki > 0 ? 'gd' : c.baaki < 0 ? 'bad' : 'ok')}</div><div class="gl"><div class="row sp"><span class="k">Payable ${inr(c.net)} mein se mile</span><b>${Math.round(c.pct)}%</b></div><div class="bar"><i style="width:${c.pct}%"></i></div><p class="note" style="margin:10px 0 0">Kul chhutti: ${c.all} din · Ek din ka rate: ${inr(c.per)}</p></div>`;
+    const lreqRow = (r, o) => `<div class="it"><div class="row"><div class="f"><b>🗓 ${r.days} din ki chhutti</b> <span class="tag ${r.status === 'approved' ? 'g' : r.status === 'rejected' ? 'r' : ''}">${{ pending: 'Intezaar', approved: 'Manzoor', rejected: 'Reject' }[r.status]}</span>
+<div class="note">${o ? '<b>' + esc(S.workers[r.uid]?.name || '') + '</b> · ' : ''}${fd(r.date)} · ${esc(r.note || '')}</div></div></div>${o && r.status === 'pending' ? `<div class="row wr" style="margin-top:8px;justify-content:flex-end"><button class="b d sm" data-a="lrej" data-u="${r.uid}" data-id="${r.id}">Reject</button><button class="b s sm" data-a="lacc" data-u="${r.uid}" data-id="${r.id}" data-p="1">Paid chhutti</button><button class="b sm" data-a="lacc" data-u="${r.uid}" data-id="${r.id}" data-p="0">Salary kategi</button></div>` : ''}</div>`;
+
+    /* Owner ke liye saari pending requests (paise + chhutti) */
+    const pendingAll = () => [
+        ...Object.keys(S.req).flatMap(u => un('req', u)).filter(r => r.status === 'pending').map(r => ({ ...r, kind: 'pay' })),
+        ...Object.keys(S.lreq).flatMap(u => un('lreq', u)).filter(r => r.status === 'pending').map(r => ({ ...r, kind: 'leave' }))
+    ];
+
+    /* ---- Popups: owner ko urgent request, worker ko naya kaam ---- */
+    const seen = new Set();
+    const popRows = a => `<table class="dt">${a.map(x => `<tr><td class="note">${x[0]}</td><td>${esc(x[1])}</td></tr>`).join('')}</table>`;
+    function checkPopups() {
+        if (!S.user || $('#modal').innerHTML)
+            return;
+        if (S.owner) {
+            const p = pendingAll().filter(x => !seen.has(x.id))[0];
+            if (!p || !S.workers[p.uid])
+                return;
+            seen.add(p.id);
+            const w = W(p.uid), ids = `data-u="${p.uid}" data-id="${p.id}"`;
+            if (p.kind === 'pay') {
+                modal(`<h3>💰 Paison ki request</h3>${popRows([['Worker', w.name], ['Amount', inr(p.amount)], ['Wajah', p.note || '-'], ['Is mahine baaki', inr(calc(w, S.month).baaki)]])}
+<div class="row wr"><button class="b s f" data-a="snooze">Baad mein</button><button class="b d f" data-a="rej" ${ids}>Reject</button><button class="b f" data-a="payreq" ${ids}>Pay karein</button></div>`);
+            }
+            else {
+                modal(`<h3>🗓 Chhutti ki request</h3>${popRows([['Worker', w.name], ['Tareekh', fd(p.date)], ['Din', p.days], ['Wajah', p.note || '-']])}
+<div class="row wr"><button class="b s f" data-a="snooze">Baad mein</button><button class="b d f" data-a="lrej" ${ids}>Reject</button></div>
+<div class="row wr" style="margin-top:8px"><button class="b s f" data-a="lacc" ${ids} data-p="1">Paid chhutti</button><button class="b f" data-a="lacc" ${ids} data-p="0">Salary kategi</button></div>`);
+            }
+            return;
+        }
+        const t = un('task', S.user.uid).find(x => x.seen === false && !seen.has(x.id));
+        if (!t)
+            return;
+        seen.add(t.id);
+        modal(`<h3>📌 Naya kaam mila hai</h3><p class="note">${esc(t.shift)} · ${fd(t.date)}</p><p style="font-size:18px;word-break:break-word">${esc(t.text)}</p>
+<button class="b" style="width:100%" data-a="ack" data-u="${t.uid}" data-id="${t.id}">Samajh gaya ✓</button>`);
+    }
+
     function ownerView() {
-        const ws = Object.keys(S.workers).map(W).sort((a, b) => a.name.localeCompare(b.name)), P = Object.keys(S.req).flatMap(u => un('req', u)).filter(r => r.status === 'pending');
+        const ws = Object.keys(S.workers).map(W).sort((a, b) => a.name.localeCompare(b.name)), P = pendingAll();
         const T = ws.reduce((a, w) => {
             const c = calc(w, S.month);
             a.n += c.net;
@@ -152,8 +196,8 @@ else {
             b = `<div class="row sp" style="margin-bottom:12px"><h3>Kaam / Instructions</h3><button class="b sm" data-a="addtask">+ Naya kaam</button></div><div class="gl">${t.map(x => taskRow(x, 1)).join('') || '<div class="empty">Aaj ka koi kaam nahi diya.</div>'}</div>`;
         }
         else if (S.tab === 'req') {
-            const r = Object.keys(S.req).flatMap(u => un('req', u)).sort((a, b) => b.at - a.at);
-            b = `<h3 style="margin-bottom:12px">Paison ki requests</h3><div class="gl">${r.map(x => reqRow(x, 1)).join('') || '<div class="empty">Koi request nahi.</div>'}</div>`;
+            const r = [...Object.keys(S.req).flatMap(u => un('req', u)).map(x => ({ ...x, kind: 'pay' })), ...Object.keys(S.lreq).flatMap(u => un('lreq', u)).map(x => ({ ...x, kind: 'leave' }))].sort((a, b) => b.at - a.at);
+            b = `<h3 style="margin-bottom:12px">Requests (paise + chhutti)</h3><div class="gl">${r.map(x => x.kind === 'pay' ? reqRow(x, 1) : lreqRow(x, 1)).join('') || '<div class="empty">Koi request nahi.</div>'}</div>`;
         }
         else if (S.tab === 'team') {
             b = `<div class="row sp" style="margin-bottom:12px"><h3>Team (${ws.length})</h3><button class="b sm" data-a="addw">+ Worker</button></div>${ws.map(w => {
@@ -162,7 +206,7 @@ else {
             }).join('') || '<div class="gl empty">Pehle worker add karein.</div>'}`;
         }
         else {
-            b = `${P.length ? `<div class="gl" data-a="tab" data-id="req" style="cursor:pointer;border-color:var(--amb)"><b style="color:var(--amb)">🔔 ${P.length} worker ko paison ki zaroorat hai</b><div class="note">Dekhne ke liye dabayein</div></div>` : ''}${monthNav()}
+            b = `${P.length ? `<div class="gl" data-a="tab" data-id="req" style="cursor:pointer;border-color:var(--amb)"><b style="color:var(--amb)">🔔 ${P.length} request aapke jawab ka intezaar kar rahi hai</b><div class="note">Dekhne ke liye dabayein</div></div>` : ''}${monthNav()}
   <div class="grid">${stat('Team', ws.length)}${stat('Kul payable', inr(T.n))}${stat('Diye gaye', inr(T.p), 'ok')}${stat('Baaki', inr(T.n - T.p), 'gd')}</div>
   <div class="gl"><h3 style="margin-bottom:6px">Team ka hisaab</h3>${ws.map(w => {
                 const c = calc(w, S.month);
@@ -184,7 +228,8 @@ else {
             b = `<h3 style="margin-bottom:12px">Aapka kaam</h3><div class="gl">${t.map(x => taskRow(x, 0)).join('') || '<div class="empty">Abhi koi instruction nahi.</div>'}</div>`;
         }
         else if (S.tab === 'req') {
-            b = `<div class="row sp" style="margin-bottom:12px"><h3>Paison ki request</h3><button class="b sm" data-a="mkreq">+ Nayi</button></div><div class="gl">${un('req', w.uid).sort((a, b) => b.at - a.at).map(x => reqRow(x, 0)).join('') || '<div class="empty">Koi request nahi.</div>'}</div><button class="b s" data-a="wowner" style="width:100%">WhatsApp par owner ko reminder</button>`;
+            const all = [...un('req', w.uid).map(x => ({ ...x, kind: 'pay' })), ...un('lreq', w.uid).map(x => ({ ...x, kind: 'leave' }))].sort((a, b) => b.at - a.at);
+            b = `<div class="row wr" style="margin-bottom:12px"><button class="b sm" data-a="mkreq">+ Paison ki request</button><button class="b s sm" data-a="mklreq">+ Chhutti ki request</button></div><div class="gl">${all.map(x => x.kind === 'pay' ? reqRow(x, 0) : lreqRow(x, 0)).join('') || '<div class="empty">Koi request nahi.</div>'}</div><button class="b s" data-a="wowner" style="width:100%">WhatsApp par owner ko reminder</button>`;
         }
         else {
             const tt = un('task', w.uid).filter(t => t.date === td());
@@ -194,11 +239,36 @@ else {
         }
         return top() + `<div class="wrap">${b}</div>` + nav([['home', 'Mera Hisaab'], ['tasks', 'Kaam'], ['req', 'Request']]);
     }
-    const loginView = () => `<form class="login" id="lg"><div class="orb"></div><h1>AK<br>Fabricator</h1><p class="note" style="margin:10px 0 20px">Ghanshyam Chauhan · Team Ledger<br>Hisaab, kaam aur bharosa ek jagah.</p><div class="gl"><label style="margin:0">Email</label><input name="e" type="email" required autocomplete="username"><label>Password</label><input name="p" type="password" required autocomplete="current-password"><button class="b" style="width:100%;margin-top:18px">Login</button><button type="button" class="b s" style="width:100%;margin-top:10px" data-a="forgot">Password bhool gaye?</button></div><a class="note" href="${SHOP_MAP}" target="_blank" rel="noopener">📍 Shop ka location dekhein</a></form>`;
+    const loginView = () => `<div class="login">
+<div class="hero">
+<svg class="bp" viewBox="0 0 330 232" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+<defs>
+<linearGradient id="gls" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#7f9bff" stop-opacity=".30"/><stop offset="1" stop-color="#d8b56a" stop-opacity=".10"/></linearGradient>
+<linearGradient id="glr" x1="0" x2="1"><stop offset="0" stop-color="#fff" stop-opacity="0"/><stop offset=".5" stop-color="#fff" stop-opacity=".38"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></linearGradient>
+<clipPath id="cp"><rect x="70" y="32" width="200" height="136"/></clipPath>
+</defs>
+<rect x="70" y="32" width="200" height="136" fill="url(#gls)" stroke="#d8b56a" stroke-width="3.5" rx="2"/>
+<g clip-path="url(#cp)"><polygon class="glare" points="0,32 44,32 18,168 -26,168" fill="url(#glr)"/></g>
+<rect x="77" y="39" width="186" height="122" fill="none" stroke="#d8b56a" stroke-opacity=".5"/>
+<line x1="170" y1="32" x2="170" y2="168" stroke="#d8b56a" stroke-width="3.5"/>
+<line x1="70" y1="72" x2="270" y2="72" stroke="#d8b56a" stroke-opacity=".6" stroke-width="2"/>
+<g stroke="#d8b56a" stroke-opacity=".55" stroke-width="1"><line x1="70" y1="196" x2="270" y2="196"/><line x1="70" y1="189" x2="70" y2="203"/><line x1="270" y1="189" x2="270" y2="203"/>
+<line x1="44" y1="32" x2="44" y2="168"/><line x1="37" y1="32" x2="51" y2="32"/><line x1="37" y1="168" x2="51" y2="168"/>
+<line x1="70" y1="172" x2="70" y2="190" stroke-dasharray="2 3"/><line x1="270" y1="172" x2="270" y2="190" stroke-dasharray="2 3"/></g>
+<g fill="#d8b56a" font-size="11" font-family="Manrope,sans-serif" text-anchor="middle"><text x="170" y="218">2400 mm</text><text transform="translate(27 100) rotate(-90)">1500 mm</text></g>
+</svg>
+<div class="brand">AK Fabricator<small>Aluminium · Glass · Interior</small></div>
+<div class="chips"><span>Aluminium</span><span>Glass</span><span>Interior</span></div>
+<p class="note" style="margin:12px 0 0">Ghanshyam Chauhan · Team Ledger</p>
+</div>
+<form class="gl" id="lg"><label style="margin:0">Email</label><input name="e" type="email" required autocomplete="username"><label>Password</label><input name="p" type="password" required autocomplete="current-password">
+<button class="b" style="width:100%;margin-top:18px">Login</button><button type="button" class="b s" style="width:100%;margin-top:10px" data-a="forgot">Password bhool gaye?</button></form>
+<p class="c" style="text-align:center"><a class="note" href="${SHOP_MAP}" target="_blank" rel="noopener">📍 Shop ka location dekhein</a></p></div>`;
     function render() {
         if (!S.ready)
             return;
         $('#app').innerHTML = !S.user ? loginView() : S.owner ? ownerView() : workerView();
+        setTimeout(checkPopups, 0);
         const l = $('#lg');
         if (l)
             l.onsubmit = async (e) => {
@@ -239,18 +309,32 @@ else {
             toast('Payment save ho gayi.');
         });
     }
+    /* ---- Back button: phone ka back sirf pichli screen par jaaye, poori site se bahar nahi ---- */
+    history.replaceState({ tab: 'home', sel: null }, '');
+    function go(tab, sel) {
+        S.tab = tab;
+        S.sel = sel;
+        history.pushState({ tab, sel }, '');
+        render();
+    }
+    window.addEventListener('popstate', e => {
+        if ($('#modal').innerHTML) {
+            $('#modal').innerHTML = '';
+            history.pushState({ tab: S.tab, sel: S.sel }, '');
+            return;
+        }
+        const st = e.state || { tab: 'home', sel: null };
+        S.tab = st.tab;
+        S.sel = st.sel;
+        render();
+    });
     const A = {
-        out: () => auth.signOut(), close: () => modal(), back: () => {
-            S.sel = null;
-            render();
-        }, open: d => {
-            S.sel = d.id;
-            render();
-        }, tab: d => {
-            S.tab = d.id;
-            S.sel = null;
-            render();
-        },
+        out: () => auth.signOut(), close: () => modal(),
+        back: () => { if (history.state && history.state.sel) history.back(); else go(S.tab, null); },
+        open: d => go(S.tab, d.id),
+        tab: d => { if (d.id !== S.tab || S.sel) go(d.id, null); },
+        snooze: () => modal(),
+        ack: d => { db.ref(`tasks/${d.u}/${d.id}/seen`).set(true); modal(); },
         mo: d => {
             const [y, m] = S.month.split('-').map(Number), n = new Date(y, m - 1 + +d.id, 1);
             S.month = `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, '0')}`;
@@ -307,7 +391,28 @@ else {
                 n: 'email', l: 'Login email', t: 'email'
             }, { n: 'pass', l: 'Password (kam se kam 6)' }], async (d) => {
             const sec = firebase.apps.find(a => a.name === 'sec') || firebase.initializeApp(cfg, 'sec');
-            const c = await sec.auth().createUserWithEmailAndPassword(d.email.trim(), d.pass);
+            /* Agar pehli koshish mein Auth account ban gaya tha par worker list mein save nahi hua,
+               to email "pehle se hai" aata hai. Us case mein wahi password se andar jaakar
+               worker ka profile poora kar dete hain. */
+            let c;
+            try {
+                c = await sec.auth().createUserWithEmailAndPassword(d.email.trim(), d.pass);
+            }
+            catch (err) {
+                if (err.code !== 'auth/email-already-in-use')
+                    throw err;
+                try {
+                    c = await sec.auth().signInWithEmailAndPassword(d.email.trim(), d.pass);
+                }
+                catch (e2) {
+                    throw new Error('Ye email Firebase mein pehle se hai. Ya to wahi password daalein jo pehle rakha tha, ya Firebase Console > Authentication > Users mein is email ko delete karein.');
+                }
+                const old = await db.ref('workers/' + c.user.uid).once('value');
+                if (old.exists()) {
+                    await sec.auth().signOut();
+                    throw new Error('Ye worker pehle se team mein hai.');
+                }
+            }
             await sec.auth().signOut();
             await db.ref('workers/' + c.user.uid).set({
                 name: d.name.trim(), role: d.role.trim(), phone: d.phone.trim(), salary: +d.salary, email: d.email.trim().toLowerCase(), joined: td()
@@ -319,10 +424,10 @@ else {
             const w = W(S.sel);
             if (!await ask('Worker delete karein?', [['Naam', w.name], ['Dhyan', 'Iska poora hisaab delete hoga']], 'Haan, delete karein', 1))
                 return;
-            for (const n of ['payments', 'leaves', 'requests', 'tasks'])
+            for (const n of ['payments', 'leaves', 'requests', 'leaveRequests', 'tasks'])
                 await db.ref(`${n}/${S.sel}`).remove();
             await db.ref('workers/' + S.sel).remove();
-            S.sel = null;
+            history.back();
             toast('Worker delete ho gaya.');
         },
         async del(d) {
@@ -343,7 +448,7 @@ else {
                 n: 'text', l: 'Kya karna hai', t: 'area'
             }], async (d) => {
             const t = {
-                text: d.text.trim(), shift: d.shift, date: d.date, done: false, at: Date.now()
+                text: d.text.trim(), shift: d.shift, date: d.date, done: false, seen: false, at: Date.now()
             }, to = d.to === 'all' ? Object.keys(S.workers) : [d.to];
             for (const u of to)
                 await db.ref('tasks/' + u).push(t);
@@ -357,6 +462,31 @@ else {
                 return;
             await db.ref(`requests/${d.u}/${d.id}/status`).set('rejected');
             toast('Request reject ho gayi.');
+        },
+        mklreq: () => form('Chhutti ki request', [{ n: 'date', l: 'Kis tareekh se', t: 'date', v: td() }, { n: 'days', l: 'Kitne din (aadha din = 0.5)', t: 'number', v: 1 }, { n: 'note', l: 'Wajah', t: 'area' }], async (d) => {
+            const r = { date: d.date, days: +d.days, note: d.note.trim(), status: 'pending', at: Date.now() };
+            if (!(r.days > 0))
+                return toast('Din sahi likhein.', 1);
+            if (!await ask('Owner ko chhutti ki request bhejein?', [['Tareekh', fd(r.date)], ['Din', r.days], ['Wajah', r.note || '-']], 'Haan, bhejein'))
+                return;
+            await db.ref('leaveRequests/' + S.user.uid).push(r);
+            modal();
+            toast('Chhutti ki request owner ko bhej di gayi.');
+        }, 'Aage badhein'),
+        async lrej(d) {
+            const r = S.lreq[d.u][d.id];
+            if (!await ask('Chhutti reject karein?', [['Worker', W(d.u).name], ['Tareekh', fd(r.date)], ['Din', r.days]], 'Haan, reject karein', 1))
+                return;
+            await db.ref(`leaveRequests/${d.u}/${d.id}/status`).set('rejected');
+            toast('Chhutti reject ho gayi.');
+        },
+        async lacc(d) {
+            const r = S.lreq[d.u][d.id], paid = d.p === '1';
+            if (!await ask('Chhutti manzoor karein?', [['Worker', W(d.u).name], ['Tareekh', fd(r.date)], ['Din', r.days], ['Salary kategi', paid ? 'Nahi (paid chhutti)' : 'Haan']], 'Haan, manzoor karein'))
+                return;
+            await db.ref('leaves/' + d.u).push({ date: r.date, days: r.days, paid, note: r.note || 'Request se manzoor' });
+            await db.ref(`leaveRequests/${d.u}/${d.id}/status`).set('approved');
+            toast('Chhutti manzoor ho gayi.');
         },
         mkreq: () => form('Paison ki zaroorat', [{
                 n: 'amount', l: 'Kitne paise chahiye (₹)', t: 'number'
