@@ -6,4 +6,5 @@ const OWNER_PHONE="918010480359";            // Ghanshyam Chauhan ka WhatsApp nu
 const SHOP_MAP="https://share.google/yna5MWV8I0eVI8R81";
 const DAYS_IN_MONTH=30;                      // Chhutti ki katauti ke liye ek mahina kitne din ka maanna hai
 const NTFY_PREFIX="akf-53bsuzl4t07hmc";   // Phone alarm notification (ntfy) ka gupt naam - kisi ko mat batayein
+const LOGIN_PHOTOS=[https:/res.cloudinary.com/dwbycpur9/image/upload/v1791281702/1000351496-1mb_rrgoig.jpg];   // Login page ke liye apne kaam ki photo ke https:// direct link, jaise ["https://i.ibb.co/abc/1.jpg","https://i.ibb.co/abc/2.jpg"] (3 se 5 photo)
 /* ================================================= */
