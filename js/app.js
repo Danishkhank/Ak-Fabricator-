@@ -125,14 +125,16 @@ else {
         };
     });
     function form(title, fs, go, btn = 'Save') {
-        modal(`<form id="fm"><h3>${title}</h3>${fs.map(f => `<label>${f.l}</label>` + (f.o ? `<select name="${f.n}">${f.o.map(o => `<option value="${o[0]}" ${o[0] == f.v ? 'selected' : ''}>${o[1]}</option>`).join('')}</select>` : f.t === 'area' ? `<textarea name="${f.n}" rows="3">${esc(f.v || '')}</textarea>` : `<input name="${f.n}" type="${f.t || 'text'}" step="any" value="${esc(f.v ?? '')}" ${f.r === 0 ? '' : 'required'}>`)).join('')}
+        modal(`<form id="fm"><h3>${title}</h3>${fs.map(f => `<label>${f.l}</label>` + (f.c ? f.c.map(o => `<label class="chk"><input type="checkbox" name="${f.n}" value="${o[0]}" ${(f.v || []).includes(o[0]) ? 'checked' : ''}> ${esc(o[1])}</label>`).join('') : f.o ? `<select name="${f.n}">${f.o.map(o => `<option value="${o[0]}" ${o[0] == f.v ? 'selected' : ''}>${o[1]}</option>`).join('')}</select>` : f.t === 'area' ? `<textarea name="${f.n}" rows="3">${esc(f.v || '')}</textarea>` : `<input name="${f.n}" type="${f.t || 'text'}" step="any" value="${esc(f.v ?? '')}" ${f.r === 0 ? '' : 'required'}>`)).join('')}
 <div class="row" style="margin-top:18px"><button type="button" class="b s f" data-a="close">Band</button><button class="b f">${btn}</button></div></form>`);
         $('#fm').onsubmit = async (e) => {
             e.preventDefault();
             const b = e.target.querySelector('button:not([type])');
             b.disabled = true;
             try {
-                await go(Object.fromEntries(new FormData(e.target)));
+                const fdata = new FormData(e.target), d = Object.fromEntries(fdata);
+                d.team = fdata.getAll('team');
+                await go(d);
             }
             catch (x) {
                 toast(errm(x), 1);
@@ -165,7 +167,7 @@ else {
                     listen(nodes[k], v => S[k] = v);
             }
             else {
-                listen('sites', v => S.site = v, r => r.orderByChild('assignedTo').equalTo(u.uid));
+                listen('mySites/' + u.uid, v => S.site = v);
                 listen('workers/' + u.uid, v => {
                     S.me = v.name ? v : null;
                     S.workers = v.name ? { [u.uid]: v } : {};
@@ -178,7 +180,7 @@ else {
     });
     /* ---- views ---- */
     const nav = (items) => `<div class="nav">${items.map(i => `<button class="${S.tab === i[0] && !S.sel ? 'on' : ''}" data-a="tab" data-id="${i[0]}">${i[1]}</button>`).join('')}</div>`;
-    const top = (sub = '') => `<div class="top"><h2>AK Fabricator</h2><a class="b s sm" href="${SHOP_MAP}" target="_blank" rel="noopener" style="text-decoration:none">📍 Shop</a><button class="b s sm" data-a="out">Logout</button></div>`;
+    const top = (sub = '') => `<div class="top"><h2 data-a="home" style="cursor:pointer">AK Fabricator</h2><a class="b s sm" href="${SHOP_MAP}" target="_blank" rel="noopener" style="text-decoration:none">📍 Shop</a><button class="b s sm" data-a="out">Logout</button></div>`;
     const monthNav = (w) => `<div class="mn"><button class="b s sm" data-a="mo" data-id="-1">‹</button><div style="text-align:center"><h3 class="gd">${mname(S.month)}</h3>${w && plabel(w) ? `<div class="note">${plabel(w)}</div>` : ''}</div><button class="b s sm" data-a="mo" data-id="1">›</button></div>`;
     const stat = (k, v, c = '') => `<div class="gl"><div class="k">${k}</div><div class="big ${c}">${v}</div></div>`;
     const taskRow = (t, owner) => `<div class="it row"><div class="f"><b>${esc(t.text)}</b><div class="note">${esc(t.shift)} · ${fd(t.date)}${owner ? ' · ' + esc(S.workers[t.uid]?.name || '') : ''}</div></div>${owner ? `<span class="tag ${t.done ? 'g' : ''}">${t.done ? 'Ho gaya' : 'Baaki'}</span><button class="b d sm" data-a="del" data-n="tasks" data-u="${t.uid}" data-id="${t.id}">✕</button>` : `<button class="b ${t.done ? 's' : ''} sm" data-a="done" data-u="${t.uid}" data-id="${t.id}">${t.done ? '✓ Done' : 'Done karein'}</button>`}</div>`;
@@ -188,9 +190,26 @@ else {
         pending: 'Intezaar', paid: 'Mil gaye', rejected: 'Reject'
     }[r.status]}</span>${o ? `<div class="note"><b>${esc(S.workers[r.uid]?.name || '')}</b> · ` : '<div class="note">'}${new Date(r.at).toLocaleDateString('en-IN')} · ${esc(r.note || '')}</div></div></div>${o && r.status === 'pending' ? `<div class="row" style="margin-top:8px;justify-content:flex-end"><button class="b d sm" data-a="rej" data-u="${r.uid}" data-id="${r.id}">Reject</button><button class="b sm" data-a="payreq" data-u="${r.uid}" data-id="${r.id}">Pay karein</button></div>` : ''}</div>`;
     const sumCards = c => `<div class="grid">${stat('Mahine ki salary', inr(c.net + c.cut))}${stat(`Chhutti kati (${c.u} din)`, '− ' + inr(c.cut), c.cut ? 'bad' : '')}${stat('Ab tak mile', inr(c.paid), 'ok')}${stat(c.baaki < 0 ? 'Zyada diye' : 'Baaki', inr(Math.abs(c.baaki)), c.baaki > 0 ? 'gd' : c.baaki < 0 ? 'bad' : 'ok')}</div><div class="gl"><div class="row sp"><span class="k">Payable ${inr(c.total)} mein se mile</span><b>${Math.round(c.pct)}%</b></div><div class="bar"><i style="width:${c.pct}%"></i></div><p class="note" style="margin:10px 0 0">${c.carry ? `Pichla baaki: <b class="${c.carry > 0 ? 'gd' : 'bad'}">${inr(Math.abs(c.carry))}${c.carry < 0 ? ' (zyada diye)' : ''}</b> · ` : ''}Kul chhutti: ${c.all} din · Ek din ka rate: ${inr(c.per)}</p></div>`;
+    /* ---- Site: ek se zyada logon ko saunpna ---- */
+    const teamOf = x => x.team ? Object.keys(x.team) : (x.assignedTo ? [x.assignedTo] : []);
+    const fmt12 = t => { const [h, m] = t.split(':').map(Number); return `${h % 12 || 12}:${pad(m)} ${h < 12 ? 'AM' : 'PM'}`; };
+    const siteCopy = x => ({ name: x.name, address: x.address || '', map: x.map || '', note: x.note || '', status: x.status || 'chalu', at: x.at || Date.now() });
+    /* Master record (sites) ke saath har worker ki apni copy (mySites) sahi rakhta hai */
+    async function syncTeam(id, x, team) {
+        const old = teamOf(x);
+        for (const u of old)
+            if (!team.includes(u))
+                await db.ref(`mySites/${u}/${id}`).remove();
+        for (const u of team)
+            if (!old.includes(u)) {
+                await db.ref(`mySites/${u}/${id}`).set({ ...siteCopy(x), seen: false });
+                ping(tWorker(u), 'Nayi site', `${x.name} ${x.address || ''}`);
+            }
+        await db.ref('sites/' + id).update({ team: Object.fromEntries(team.map(u => [u, true])), assignedTo: null });
+    }
     const siteRow = (x, o) => `<div class="gl"><div class="row"><div class="f"><b>🏗 ${esc(x.name)}</b> <span class="tag ${x.status === 'done' ? 'g' : ''}">${x.status === 'done' ? 'Poora' : 'Chalu'}</span>
-${x.address ? `<div class="note">📍 <a class="gd" href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(x.address)}" target="_blank" rel="noopener">${esc(x.address)}</a></div>` : ''}${x.note ? `<div class="note">${esc(x.note)}</div>` : ''}
-${o ? `<div class="note">Zimmedari: <b>${x.assignedTo && S.workers[x.assignedTo] ? esc(S.workers[x.assignedTo].name) : 'Abhi kisi ko nahi saunpi'}</b></div>` : ''}</div></div>
+${x.address ? `<div class="note">📍 <a class="gd" href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(x.address)}" target="_blank" rel="noopener">${esc(x.address)}</a></div>` : ''}${/^https:\/\//.test(x.map || '') ? `<div class="note"><a class="gd" href="${esc(x.map)}" target="_blank" rel="noopener">🗺 Map kholein</a></div>` : ''}${x.note ? `<div class="note">${esc(x.note)}</div>` : ''}
+${o ? `<div class="note">Zimmedari: <b>${esc(teamOf(x).map(u => S.workers[u]?.name).filter(Boolean).join(', ')) || 'Abhi kisi ko nahi saunpi'}</b></div>` : ''}</div></div>
 ${o ? `<div class="row wr" style="margin-top:10px;justify-content:flex-end"><button class="b d sm" data-a="delsite" data-id="${x.id}">Delete</button><button class="b s sm" data-a="sstatus" data-id="${x.id}">${x.status === 'done' ? 'Dobara chalu' : 'Poora hua'}</button><button class="b sm" data-a="assign" data-id="${x.id}">Kisko saunpein</button></div>` : ''}</div>`;
     const siteList = f => Object.entries(S.site).map(([id, v]) => ({ id, ...v })).filter(f).sort((a, b) => (a.status === 'done') - (b.status === 'done') || (b.at || 0) - (a.at || 0));
     const lreqRow = (r, o) => `<div class="it"><div class="row"><div class="f"><b>🗓 ${r.days} din ki chhutti</b> <span class="tag ${r.status === 'approved' ? 'g' : r.status === 'rejected' ? 'r' : ''}">${{ pending: 'Intezaar', approved: 'Manzoor', rejected: 'Reject' }[r.status]}</span>
@@ -269,10 +288,10 @@ ${o ? `<div class="row wr" style="margin-top:10px;justify-content:flex-end"><but
             }
             return;
         }
-        const st = siteList(x => x.assignedTo === S.user.uid && x.seen === false && !seen.has(x.id))[0];
+        const st = siteList(x => x.seen === false && !seen.has(x.id))[0];
         if (st) {
             seen.add(st.id);
-            popup(`<h3>🏗 Nayi site aapko saunpi gayi</h3>${popRows([['Site', st.name], ['Pata', st.address || '-'], ['Note', st.note || '-']])}
+            popup(`<h3>🏗 Nayi site aapko saunpi gayi</h3>${popRows([['Site', st.name], ['Pata', st.address || '-'], ['Note', st.note || '-']])}${/^https:\/\//.test(st.map || '') ? `<p><a class="gd" href="${esc(st.map)}" target="_blank" rel="noopener">🗺 Map kholein</a></p>` : ''}
 <button class="b" style="width:100%" data-a="sack" data-id="${st.id}">Samajh gaya ✓</button>`);
             return;
         }
@@ -336,7 +355,7 @@ ${o ? `<div class="row wr" style="margin-top:10px;justify-content:flex-end"><but
         const w = W(S.user.uid), c = calc(w, S.month);
         let b = '';
         if (S.tab === 'sites') {
-            b = `<h3 style="margin-bottom:12px">Meri Sites</h3>${siteList(x => x.assignedTo === w.uid).map(x => siteRow(x, 0)).join('') || '<div class="gl empty">Abhi aapko koi site nahi saunpi gayi.</div>'}`;
+            b = `<h3 style="margin-bottom:12px">Meri Sites</h3>${siteList(() => true).map(x => siteRow(x, 0)).join('') || '<div class="gl empty">Abhi aapko koi site nahi saunpi gayi.</div>'}`;
         }
         else if (S.tab === 'tasks') {
             const t = un('task', w.uid).sort((a, b) => b.date.localeCompare(a.date)).slice(0, 30);
@@ -354,8 +373,12 @@ ${o ? `<div class="row wr" style="margin-top:10px;justify-content:flex-end"><but
         }
         return top() + `<div class="wrap">${b}</div>` + nav([['home', 'Mera Hisaab'], ['tasks', 'Kaam'], ['sites', 'Sites'], ['req', 'Request']]);
     }
-    const loginView = () => `<div class="login">
+    const photos = () => (typeof LOGIN_PHOTOS !== 'undefined' && Array.isArray(LOGIN_PHOTOS) ? LOGIN_PHOTOS : []).filter(u => /^https:\/\//.test(u)).slice(0, 5);
+    const slidesHtml = () => photos().length ? `<div class="slides">${photos().map((u, i) => `<img class="${i ? '' : 'on'}" src="${esc(u)}" alt="" referrerpolicy="no-referrer" onerror="this.remove()">`).join('')}</div>` : '';
+    let slideT = null;
+    const loginView = () => `<div class="login ${photos().length ? 'has-photos' : ''}">
 <div class="hero">
+${slidesHtml()}
 <svg class="bp" viewBox="0 0 330 232" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
 <defs>
 <linearGradient id="gls" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#7f9bff" stop-opacity=".30"/><stop offset="1" stop-color="#d8b56a" stop-opacity=".10"/></linearGradient>
@@ -384,6 +407,18 @@ ${o ? `<div class="row wr" style="margin-top:10px;justify-content:flex-end"><but
             return;
         $('#app').innerHTML = !S.user ? loginView() : S.owner ? ownerView() : workerView();
         setTimeout(checkPopups, 0);
+        clearInterval(slideT);
+        if (document.querySelectorAll('.slides img').length > 1) {
+            let k = 0;
+            slideT = setInterval(() => {
+                const im = document.querySelectorAll('.slides img');
+                if (!im.length)
+                    return clearInterval(slideT);
+                im[k % im.length].classList.remove('on');
+                k = (k + 1) % im.length;
+                im[k].classList.add('on');
+            }, 3500);
+        }
         const l = $('#lg');
         if (l)
             l.onsubmit = async (e) => {
@@ -449,6 +484,7 @@ ${o ? `<div class="row wr" style="margin-top:10px;justify-content:flex-end"><but
         back: () => { if (history.state && history.state.sel) history.back(); else go(S.tab, null); },
         open: d => go(S.tab, d.id),
         tab: d => { if (d.id !== S.tab || S.sel) go(d.id, null); },
+        home: () => { modal(); if (S.tab !== 'home' || S.sel) go('home', null); window.scrollTo(0, 0); },
         snooze: () => modal(),
         ack: d => { db.ref(`tasks/${d.u}/${d.id}/seen`).set(true); modal(); },
         mo: d => {
@@ -546,11 +582,11 @@ ${o ? `<div class="row wr" style="margin-top:10px;justify-content:flex-end"><but
             const w = W(S.sel);
             if (!await ask('Worker delete karein?', [['Naam', w.name], ['Dhyan', 'Iska poora hisaab delete hoga']], 'Haan, delete karein', 1))
                 return;
-            for (const n of ['payments', 'leaves', 'requests', 'leaveRequests', 'tasks'])
+            for (const n of ['payments', 'leaves', 'requests', 'leaveRequests', 'tasks', 'mySites'])
                 await db.ref(`${n}/${S.sel}`).remove();
             for (const [id, x] of Object.entries(S.site))
-                if (x.assignedTo === S.sel)
-                    await db.ref('sites/' + id + '/assignedTo').set('');
+                if (teamOf(x).includes(S.sel))
+                    await syncTeam(id, x, teamOf(x).filter(u => u !== S.sel));
             await db.ref('workers/' + S.sel).remove();
             history.back();
             toast('Worker delete ho gaya.');
@@ -566,18 +602,20 @@ ${o ? `<div class="row wr" style="margin-top:10px;justify-content:flex-end"><but
         addtask: d => form('Kaam / Instruction', [{
                 n: 'to', l: 'Kisko', o: [['all', 'Sabko'], ...Object.keys(S.workers).map(u => [u, S.workers[u].name])], v: d.u || 'all'
             }, {
-                n: 'shift', l: 'Kab', o: [['Subah aate hi', 'Subah aate hi'], ['Dopahar', 'Dopahar'], ['Shaam', 'Shaam'], ['Band karte waqt', 'Band karte waqt']]
+                n: 'shift', l: 'Kab', o: [['Subah aate hi', 'Subah aate hi'], ['Dopahar', 'Dopahar'], ['Shaam', 'Shaam'], ['Band karte waqt', 'Band karte waqt'], ['Other', 'Other (time khud likhein)']]
             }, {
                 n: 'date', l: 'Tareekh', t: 'date', v: td()
+            }, {
+                n: 'time', l: 'Time (jab "Other" chuna ho)', t: 'time', r: 0
             }, {
                 n: 'text', l: 'Kya karna hai', t: 'area'
             }], async (d) => {
             const t = {
-                text: d.text.trim(), shift: d.shift, date: d.date, done: false, seen: false, at: Date.now()
+                text: d.text.trim(), shift: d.shift === 'Other' ? (d.time ? 'Time ' + fmt12(d.time) : 'Other') : d.shift, date: d.date, done: false, seen: false, at: Date.now()
             }, to = d.to === 'all' ? Object.keys(S.workers) : [d.to];
             for (const u of to) {
             await db.ref('tasks/' + u).push(t);
-            ping(tWorker(u), 'Naya kaam', `${d.shift}: ${t.text}`);
+            ping(tWorker(u), 'Naya kaam', `${t.shift}: ${t.text}`);
         }
             modal();
             toast('Kaam de diya gaya.');
@@ -591,39 +629,46 @@ ${o ? `<div class="row wr" style="margin-top:10px;justify-content:flex-end"><but
             ping(tWorker(d.u), 'Paison ki request reject', `${inr(r.amount)} ki request abhi manzoor nahi hui`);
             toast('Request reject ho gayi.');
         },
-        addsite: () => form('Nayi site', [{ n: 'name', l: 'Site ka naam' }, { n: 'address', l: 'Pata / location', r: 0 }, { n: 'note', l: 'Note (optional)', t: 'area', r: 0 },
-            { n: 'to', l: 'Kisko saunpni hai', o: [['', 'Abhi kisi ko nahi'], ...Object.keys(S.workers).map(u => [u, S.workers[u].name])] }], async (d) => {
-            const x = { name: d.name.trim(), address: d.address.trim(), note: d.note.trim(), status: 'chalu', assignedTo: d.to || '', seen: false, at: Date.now() };
-            await db.ref('sites').push(x);
-            if (x.assignedTo)
-                ping(tWorker(x.assignedTo), 'Nayi site', `${x.name} ${x.address}`);
+        addsite: () => form('Nayi site', [{ n: 'name', l: 'Site ka naam' }, { n: 'address', l: 'Pata (likhkar)', r: 0 },
+            { n: 'map', l: 'Google Maps ka link (optional)', t: 'url', r: 0 }, { n: 'note', l: 'Note (optional)', t: 'area', r: 0 },
+            { n: 'team', l: 'Kin-kin ko saunpni hai (ek se zyada chun sakte hain)', c: Object.keys(S.workers).map(u => [u, S.workers[u].name]) }], async (d) => {
+            const mp = d.map.trim();
+            if (mp && !/^https:\/\//.test(mp))
+                return toast('Map link https:// se shuru hona chahiye.', 1);
+            const x = { name: d.name.trim(), address: d.address.trim(), map: mp, note: d.note.trim(), status: 'chalu', at: Date.now() };
+            const r = db.ref('sites').push();
+            await r.set(x);
+            await syncTeam(r.key, x, d.team);
             modal();
             toast('Site save ho gayi.');
         }, 'Site banayein'),
         assign: d => {
             const x = S.site[d.id];
-            form('Site kisko saunpein?', [{ n: 'to', l: x.name, o: [['', 'Kisi ko nahi'], ...Object.keys(S.workers).map(u => [u, S.workers[u].name])], v: x.assignedTo || '' }], async (f) => {
-                if (f.to === (x.assignedTo || ''))
-                    return modal();
-                if (!await ask('Site saunpein?', [['Site', x.name], ['Kisko', f.to ? W(f.to).name : 'Kisi ko nahi']], 'Haan, saunpein'))
+            form('Site kin-kin ko saunpein?', [{ n: 'team', l: x.name, c: Object.keys(S.workers).map(u => [u, S.workers[u].name]), v: teamOf(x) }], async (f) => {
+                const names = f.team.map(u => W(u).name).join(', ') || 'Kisi ko nahi';
+                if (!await ask('Site saunpein?', [['Site', x.name], ['Kin ko', names]], 'Haan, saunpein'))
                     return;
-                await db.ref('sites/' + d.id).update({ assignedTo: f.to, seen: false });
-                if (f.to)
-                    ping(tWorker(f.to), 'Nayi site', `${x.name} ${x.address || ''}`);
+                await syncTeam(d.id, x, f.team);
                 modal();
                 toast('Site saunp di gayi.');
             }, 'Aage badhein');
         },
         async sstatus(d) {
-            await db.ref('sites/' + d.id + '/status').set(S.site[d.id].status === 'done' ? 'chalu' : 'done');
+            const x = S.site[d.id], st = x.status === 'done' ? 'chalu' : 'done';
+            await db.ref('sites/' + d.id + '/status').set(st);
+            for (const u of teamOf(x))
+                await db.ref(`mySites/${u}/${d.id}/status`).set(st);
         },
         async delsite(d) {
-            if (!await ask('Site delete karein?', [['Site', S.site[d.id].name]], 'Haan, delete karein', 1))
+            const x = S.site[d.id];
+            if (!await ask('Site delete karein?', [['Site', x.name]], 'Haan, delete karein', 1))
                 return;
+            for (const u of teamOf(x))
+                await db.ref(`mySites/${u}/${d.id}`).remove();
             await db.ref('sites/' + d.id).remove();
             toast('Site delete ho gayi.');
         },
-        sack: d => { db.ref(`sites/${d.id}/seen`).set(true); modal(); },
+        sack: d => { db.ref(`mySites/${S.user.uid}/${d.id}/seen`).set(true); modal(); },
         pingtest: () => {
             ping(S.owner ? tOwner() : tWorker(S.user.uid), 'Test notification', 'Agar ye awaaz ke saath aaya to setup sahi hai.');
             toast('Test bhej diya. Phone par 5-10 second mein aana chahiye.');
