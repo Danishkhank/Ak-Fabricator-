@@ -4,4 +4,5 @@ const cfg={apiKey:"AIzaSyDGx8L89lE8hRFOw64HIwL2-04eBc2P014",authDomain:"hisab-ki
 const OWNER_EMAIL="cghanshyam787@gmail.com";      // Ghanshyam bhai ki login email
 const OWNER_PHONE="918010480359";            // Ghanshyam Chauhan ka WhatsApp number
 const SHOP_MAP="https://share.google/yna5MWV8I0eVI8R81";
+const DAYS_IN_MONTH=30;                      // Chhutti ki katauti ke liye ek mahina kitne din ka maanna hai
 /* ================================================= */
