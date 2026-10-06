@@ -38,10 +38,32 @@ else {
         id, uid, ...v
     })).sort((a, b) => String(b.date || b.at).localeCompare(String(a.date || a.at)));
     const W = uid => ({ uid, ...S.workers[uid] });
+    /* ---- Har worker ka mahina alag tareekh se shuru ho sakta hai (cycle: 1 se 28) ---- */
+    const cyc = w => Math.min(28, Math.max(1, +w.cycle || 1));
+    const pad = n => String(n).padStart(2, '0');
+    /* [shuru, ant) - jaise cycle 5 aur October => 2026-10-05 se 2026-11-05 se pehle tak */
+    function range(w, m) {
+        const [y, mo] = m.split('-').map(Number), n = new Date(y, mo, 1);
+        return [`${y}-${pad(mo)}-${pad(cyc(w))}`, `${n.getFullYear()}-${pad(n.getMonth() + 1)}-${pad(cyc(w))}`];
+    }
+    const inP = (w, m, date) => { const [a, b] = range(w, m); return date >= a && date < b; };
+    /* Koi tareekh kis cycle-mahine mein aati hai (3 Oct, cycle 5 => September wala mahina) */
+    function pkey(w, date) {
+        const [y, mo, d] = date.split('-').map(Number), k = new Date(y, mo - 1 - (d < cyc(w) ? 1 : 0), 1);
+        return `${k.getFullYear()}-${pad(k.getMonth() + 1)}`;
+    }
+    function plabel(w) {
+        if (cyc(w) === 1)
+            return '';
+        const [a, b] = range(w, S.month), e = new Date(b + 'T00:00');
+        e.setDate(e.getDate() - 1);
+        return `${fd(a)} se ${fd(`${e.getFullYear()}-${pad(e.getMonth() + 1)}-${pad(e.getDate())}`)} tak`;
+    }
+    const avatar = (w, big) => `<div class="av ${big ? 'lg' : ''}">${/^https:\/\//.test(w.photo || '') ? `<img src="${esc(w.photo)}" alt="" referrerpolicy="no-referrer" onerror="this.remove()">` : ''}<span>${esc((w.name || '?')[0])}</span></div>`;
     function calc(w, m) {
         const [y, mo] = m.split('-').map(Number), per = w.salary / DAYS_IN_MONTH;
-        const L = un('leave', w.uid).filter(l => l.date.startsWith(m)), all = L.reduce((a, l) => a + l.days, 0), u = L.filter(l => !l.paid).reduce((a, l) => a + l.days, 0);
-        const cut = Math.round(per * u), net = w.salary - cut, paid = un('pay', w.uid).filter(p => p.date.startsWith(m)).reduce((a, p) => a + p.amount, 0);
+        const L = un('leave', w.uid).filter(l => inP(w, m, l.date)), all = L.reduce((a, l) => a + l.days, 0), u = L.filter(l => !l.paid).reduce((a, l) => a + l.days, 0);
+        const cut = Math.round(per * u), net = w.salary - cut, paid = un('pay', w.uid).filter(p => inP(w, m, p.date)).reduce((a, p) => a + p.amount, 0);
         return {
             per, all, u, cut, net, paid, baaki: net - paid, pct: net > 0 ? Math.min(100, paid / net * 100) : 0
         };
@@ -126,7 +148,7 @@ else {
     /* ---- views ---- */
     const nav = (items) => `<div class="nav">${items.map(i => `<button class="${S.tab === i[0] && !S.sel ? 'on' : ''}" data-a="tab" data-id="${i[0]}">${i[1]}</button>`).join('')}</div>`;
     const top = (sub = '') => `<div class="top"><h2>AK Fabricator</h2><a class="b s sm" href="${SHOP_MAP}" target="_blank" rel="noopener" style="text-decoration:none">📍 Shop</a><button class="b s sm" data-a="out">Logout</button></div>`;
-    const monthNav = () => `<div class="mn"><button class="b s sm" data-a="mo" data-id="-1">‹</button><h3 class="gd">${mname(S.month)}</h3><button class="b s sm" data-a="mo" data-id="1">›</button></div>`;
+    const monthNav = (w) => `<div class="mn"><button class="b s sm" data-a="mo" data-id="-1">‹</button><div style="text-align:center"><h3 class="gd">${mname(S.month)}</h3>${w && plabel(w) ? `<div class="note">${plabel(w)}</div>` : ''}</div><button class="b s sm" data-a="mo" data-id="1">›</button></div>`;
     const stat = (k, v, c = '') => `<div class="gl"><div class="k">${k}</div><div class="big ${c}">${v}</div></div>`;
     const taskRow = (t, owner) => `<div class="it row"><div class="f"><b>${esc(t.text)}</b><div class="note">${esc(t.shift)} · ${fd(t.date)}${owner ? ' · ' + esc(S.workers[t.uid]?.name || '') : ''}</div></div>${owner ? `<span class="tag ${t.done ? 'g' : ''}">${t.done ? 'Ho gaya' : 'Baaki'}</span><button class="b d sm" data-a="del" data-n="tasks" data-u="${t.uid}" data-id="${t.id}">✕</button>` : `<button class="b ${t.done ? 's' : ''} sm" data-a="done" data-u="${t.uid}" data-id="${t.id}">${t.done ? '✓ Done' : 'Done karein'}</button>`}</div>`;
     const payRow = (p, o) => `<div class="it row"><div class="f"><b>${inr(p.amount)}</b> <span class="tag">${esc(p.mode)}</span><div class="note">${fd(p.date)}${p.note ? ' · ' + esc(p.note) : ''}</div></div>${o ? `<button class="b d sm" data-a="del" data-n="payments" data-u="${p.uid}" data-id="${p.id}">✕</button>` : ''}</div>`;
@@ -186,10 +208,10 @@ else {
         let b = '';
         if (S.sel && S.workers[S.sel]) {
             const w = W(S.sel), c = calc(w, S.month);
-            b = `<button class="b s sm" data-a="back">← Wapas</button><div class="gl" style="margin-top:12px"><div class="row"><div class="av">${esc(w.name[0])}</div><div class="f"><h3>${esc(w.name)}</h3><div class="note">${esc(w.role || '')} · ${esc(w.phone || '')} · Salary ${inr(w.salary)}/mahina</div></div></div>
-  <div class="row wr" style="margin-top:12px"><button class="b sm" data-a="addpay">+ Payment</button><button class="b s sm" data-a="addleave">+ Chhutti</button><button class="b s sm" data-a="addtask" data-u="${w.uid}">+ Kaam</button><button class="b s sm" data-a="remind">WhatsApp</button><button class="b s sm" data-a="salary">Salary badlein</button><button class="b d sm" data-a="delw">Delete</button></div></div>
-  ${monthNav()}${sumCards(c)}<div class="gl"><h3>Payments</h3>${un('pay', w.uid).filter(p => p.date.startsWith(S.month)).map(p => payRow(p, 1)).join('') || '<div class="empty">Is mahine koi payment nahi.</div>'}</div>
-  <div class="gl"><h3>Chhuttiyan</h3>${un('leave', w.uid).filter(l => l.date.startsWith(S.month)).map(l => leaveRow(l, 1)).join('') || '<div class="empty">Is mahine koi chhutti nahi.</div>'}</div>`;
+            b = `<button class="b s sm" data-a="back">← Wapas</button><div class="gl" style="margin-top:12px"><div class="row">${avatar(w)}<div class="f"><h3>${esc(w.name)}</h3><div class="note">${esc(w.role || '')} · ${esc(w.phone || '')} · Salary ${inr(w.salary)}/mahina</div></div></div>
+  <div class="row wr" style="margin-top:12px"><button class="b sm" data-a="addpay">+ Payment</button><button class="b s sm" data-a="addleave">+ Chhutti</button><button class="b s sm" data-a="addtask" data-u="${w.uid}">+ Kaam</button><button class="b s sm" data-a="remind">WhatsApp</button><button class="b s sm" data-a="salary">Profile edit</button><button class="b d sm" data-a="delw">Delete</button></div></div>
+  ${monthNav(w)}${sumCards(c)}<div class="gl"><h3>Payments</h3>${un('pay', w.uid).filter(p => inP(w, S.month, p.date)).map(p => payRow(p, 1)).join('') || '<div class="empty">Is mahine koi payment nahi.</div>'}</div>
+  <div class="gl"><h3>Chhuttiyan</h3>${un('leave', w.uid).filter(l => inP(w, S.month, l.date)).map(l => leaveRow(l, 1)).join('') || '<div class="empty">Is mahine koi chhutti nahi.</div>'}</div>`;
         }
         else if (S.tab === 'tasks') {
             const t = Object.keys(S.task).flatMap(u => un('task', u)).filter(x => x.date === td() || !x.done).sort((a, b) => b.date.localeCompare(a.date));
@@ -202,7 +224,7 @@ else {
         else if (S.tab === 'team') {
             b = `<div class="row sp" style="margin-bottom:12px"><h3>Team (${ws.length})</h3><button class="b sm" data-a="addw">+ Worker</button></div>${ws.map(w => {
                 const c = calc(w, S.month);
-                return `<div class="gl" data-a="open" data-id="${w.uid}" style="cursor:pointer"><div class="row"><div class="av">${esc(w.name[0])}</div><div class="f"><b>${esc(w.name)}</b><div class="note">${esc(w.role || '')} · ${inr(w.salary)}</div></div><div style="text-align:right"><b class="${c.baaki > 0 ? 'gd' : 'ok'}">${inr(c.baaki)}</b><div class="k">baaki</div></div></div><div class="bar"><i style="width:${c.pct}%"></i></div></div>`;
+                return `<div class="gl" data-a="open" data-id="${w.uid}" style="cursor:pointer"><div class="row">${avatar(w)}<div class="f"><b>${esc(w.name)}</b><div class="note">${esc(w.role || '')} · ${inr(w.salary)}</div></div><div style="text-align:right"><b class="${c.baaki > 0 ? 'gd' : 'ok'}">${inr(c.baaki)}</b><div class="k">baaki</div></div></div><div class="bar"><i style="width:${c.pct}%"></i></div></div>`;
             }).join('') || '<div class="gl empty">Pehle worker add karein.</div>'}`;
         }
         else {
@@ -233,9 +255,9 @@ else {
         }
         else {
             const tt = un('task', w.uid).filter(t => t.date === td());
-            b = `<div class="gl"><div class="k">Namaste</div><h1 style="font-size:34px" class="gd">${esc(w.name)}</h1><div class="note">${esc(w.role || '')} · Salary ${inr(w.salary)}/mahina</div></div>${tt.length ? `<div class="gl"><h3>Aaj ka kaam</h3>${tt.map(x => taskRow(x, 0)).join('')}</div>` : ''}${monthNav()}${sumCards(c)}
-  <div class="gl"><h3>Mile hue paise</h3>${un('pay', w.uid).filter(p => p.date.startsWith(S.month)).map(p => payRow(p, 0)).join('') || '<div class="empty">Is mahine abhi kuch nahi mila.</div>'}</div>
-  <div class="gl"><h3>Meri chhuttiyan</h3>${un('leave', w.uid).filter(l => l.date.startsWith(S.month)).map(l => leaveRow(l, 0)).join('') || '<div class="empty">Is mahine koi chhutti nahi.</div>'}</div>`;
+            b = `<div class="gl"><div style="float:right">${avatar(w, 1)}</div><div class="k">Namaste</div><h1 style="font-size:34px" class="gd">${esc(w.name)}</h1><div class="note">${esc(w.role || '')} · Salary ${inr(w.salary)}/mahina</div></div>${tt.length ? `<div class="gl"><h3>Aaj ka kaam</h3>${tt.map(x => taskRow(x, 0)).join('')}</div>` : ''}${monthNav(w)}${sumCards(c)}
+  <div class="gl"><h3>Mile hue paise</h3>${un('pay', w.uid).filter(p => inP(w, S.month, p.date)).map(p => payRow(p, 0)).join('') || '<div class="empty">Is mahine abhi kuch nahi mila.</div>'}</div>
+  <div class="gl"><h3>Meri chhuttiyan</h3>${un('leave', w.uid).filter(l => inP(w, S.month, l.date)).map(l => leaveRow(l, 0)).join('') || '<div class="empty">Is mahine koi chhutti nahi.</div>'}</div>`;
         }
         return top() + `<div class="wrap">${b}</div>` + nav([['home', 'Mera Hisaab'], ['tasks', 'Kaam'], ['req', 'Request']]);
     }
@@ -299,7 +321,7 @@ else {
             };
             if (!(p.amount > 0))
                 return toast('Sahi amount likhein.', 1);
-            const over = p.amount > Math.max(0, calc(w, d.date.slice(0, 7)).baaki);
+            const over = p.amount > Math.max(0, calc(w, pkey(w, d.date)).baaki);
             if (!await ask(over ? '⚠ Baaki se zyada payment' : 'Payment confirm karein', [...rowsPay(p, w), ...(over ? [['Dhyan', 'Ye salary limit se zyada hai (advance)']] : [])], 'Haan, save karein'))
                 return payForm(uid, amt, reqId);
             await db.ref('payments/' + uid).push(p);
@@ -364,7 +386,7 @@ else {
                 };
                 if (!(l.days > 0))
                     return toast('Din sahi likhein.', 1);
-                if (!await ask('Chhutti confirm karein', [['Worker', w.name], ['Tareekh', fd(l.date)], ['Din', l.days], ['Salary kategi', l.paid ? 'Nahi' : 'Haan ≈ ' + inr(calc(w, d.date.slice(0, 7)).per * l.days)]], 'Haan, add karein'))
+                if (!await ask('Chhutti confirm karein', [['Worker', w.name], ['Tareekh', fd(l.date)], ['Din', l.days], ['Salary kategi', l.paid ? 'Nahi' : 'Haan ≈ ' + inr(calc(w, pkey(w, d.date)).per * l.days)]], 'Haan, add karein'))
                     return;
                 await db.ref('leaves/' + S.sel).push(l);
                 modal();
@@ -373,12 +395,17 @@ else {
         },
         salary: () => {
             const w = W(S.sel);
-            form('Monthly salary', [{
-                    n: 's', l: 'Salary (₹/mahina)', t: 'number', v: w.salary
-                }], async (d) => {
-                await db.ref(`workers/${S.sel}/salary`).set(+d.s);
+            form('Profile badlein', [
+                { n: 's', l: 'Salary (₹/mahina)', t: 'number', v: w.salary },
+                { n: 'cycle', l: 'Mahina kis tareekh se shuru hota hai (1 se 28)', t: 'number', v: cyc(w) },
+                { n: 'photo', l: 'Photo ka link (https://...)', t: 'url', v: w.photo || '', r: 0 }
+            ], async (d) => {
+                const ph = d.photo.trim();
+                if (ph && !/^https:\/\//.test(ph))
+                    return toast('Photo link https:// se shuru hona chahiye.', 1);
+                await db.ref(`workers/${S.sel}`).update({ salary: +d.s, cycle: Math.min(28, Math.max(1, Math.round(+d.cycle) || 1)), photo: ph });
                 modal();
-                toast('Salary update ho gayi.');
+                toast('Profile update ho gaya.');
             });
         },
         addw: () => form('Naya worker', [{ n: 'name', l: 'Naam' }, {
@@ -389,7 +416,7 @@ else {
                 n: 'salary', l: 'Salary (₹/mahina)', t: 'number'
             }, {
                 n: 'email', l: 'Login email', t: 'email'
-            }, { n: 'pass', l: 'Password (kam se kam 6)' }], async (d) => {
+            }, { n: 'pass', l: 'Password (kam se kam 6)' }, { n: 'cycle', l: 'Mahina kis tareekh se shuru hota hai (1 se 28)', t: 'number', v: 1 }, { n: 'photo', l: 'Photo ka link (optional)', t: 'url', r: 0 }], async (d) => {
             const sec = firebase.apps.find(a => a.name === 'sec') || firebase.initializeApp(cfg, 'sec');
             /* Agar pehli koshish mein Auth account ban gaya tha par worker list mein save nahi hua,
                to email "pehle se hai" aata hai. Us case mein wahi password se andar jaakar
@@ -415,7 +442,7 @@ else {
             }
             await sec.auth().signOut();
             await db.ref('workers/' + c.user.uid).set({
-                name: d.name.trim(), role: d.role.trim(), phone: d.phone.trim(), salary: +d.salary, email: d.email.trim().toLowerCase(), joined: td()
+                name: d.name.trim(), role: d.role.trim(), phone: d.phone.trim(), salary: +d.salary, email: d.email.trim().toLowerCase(), joined: td(), cycle: Math.min(28, Math.max(1, Math.round(+d.cycle) || 1)), photo: (d.photo || '').trim()
             });
             modal();
             toast('Worker add ho gaya.');
