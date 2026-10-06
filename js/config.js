@@ -5,4 +5,5 @@ const OWNER_EMAIL="cghanshyam787@gmail.com";      // Ghanshyam bhai ki login ema
 const OWNER_PHONE="918010480359";            // Ghanshyam Chauhan ka WhatsApp number
 const SHOP_MAP="https://share.google/yna5MWV8I0eVI8R81";
 const DAYS_IN_MONTH=30;                      // Chhutti ki katauti ke liye ek mahina kitne din ka maanna hai
+const NTFY_PREFIX="akf-53bsuzl4t07hmc";   // Phone alarm notification (ntfy) ka gupt naam - kisi ko mat batayein
 /* ================================================= */
