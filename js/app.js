@@ -25,7 +25,7 @@ const errm = e => ({
     'auth/invalid-credential': 'Email ya password galat hai.', 'auth/email-already-in-use': 'Ye email pehle se hai.', 'auth/weak-password': 'Password kam se kam 6 akshar ka rakhein.', 'auth/network-request-failed': 'Internet check karein.'
 }[e.code] || (e.code === 'PERMISSION_DENIED' ? 'Permission nahi hai (rules check karein).' : e.message));
 const S = {
-    user: null, owner: false, ready: false, workers: {}, pay: {}, leave: {}, req: {}, lreq: {}, task: {}, me: undefined, tab: 'home', sel: null, month: td().slice(0, 7)
+    user: null, owner: false, ready: false, workers: {}, pay: {}, leave: {}, req: {}, lreq: {}, site: {}, task: {}, me: undefined, tab: 'home', sel: null, month: td().slice(0, 7)
 };
 if (cfg.apiKey.startsWith('PASTE')) {
     document.getElementById('app').innerHTML = '<div class="login gl"><h2 class="gd">Setup baaki hai</h2><p class="note">index.html ke upar SETTINGS mein apna Firebase config, owner email aur phone daaliye.</p></div>';
@@ -60,14 +60,41 @@ else {
         return `${fd(a)} se ${fd(`${e.getFullYear()}-${pad(e.getMonth() + 1)}-${pad(e.getDate())}`)} tak`;
     }
     const avatar = (w, big) => `<div class="av ${big ? 'lg' : ''}">${/^https:\/\//.test(w.photo || '') ? `<img src="${esc(w.photo)}" alt="" referrerpolicy="no-referrer" onerror="this.remove()">` : ''}<span>${esc((w.name || '?')[0])}</span></div>`;
-    function calc(w, m) {
-        const [y, mo] = m.split('-').map(Number), per = w.salary / DAYS_IN_MONTH;
+    /* Ek cycle-mahine ka hisaab (is mahine ki salary, katauti aur diye gaye paise) */
+    function period(w, m) {
+        const per = Number(w.salary || 0) / DAYS_IN_MONTH;
         const L = un('leave', w.uid).filter(l => inP(w, m, l.date)), all = L.reduce((a, l) => a + l.days, 0), u = L.filter(l => !l.paid).reduce((a, l) => a + l.days, 0);
-        const cut = Math.round(per * u), net = w.salary - cut, paid = un('pay', w.uid).filter(p => inP(w, m, p.date)).reduce((a, p) => a + p.amount, 0);
-        return {
-            per, all, u, cut, net, paid, baaki: net - paid, pct: net > 0 ? Math.min(100, paid / net * 100) : 0
-        };
+        const cut = Math.round(per * u), net = Number(w.salary || 0) - cut, paid = un('pay', w.uid).filter(p => inP(w, m, p.date)).reduce((a, p) => a + Number(p.amount || 0), 0);
+        return { per, all, u, cut, net, paid };
     }
+    /* Worker ka pehla mahina: kaam shuru hone ki tareekh ya sabse purani entry */
+    function firstKey(w) {
+        const ds = [w.joined, ...un('pay', w.uid).map(x => x.date), ...un('leave', w.uid).map(x => x.date)].filter(x => /^\d{4}-\d{2}-\d{2}$/.test(x || '')).sort();
+        return ds.length ? pkey(w, ds[0]) : null;
+    }
+    /* Pichle sab mahino ka baaki (carry forward) + is mahine ka hisaab */
+    function calc(w, m) {
+        const c = period(w, m), f = firstKey(w);
+        let carry = 0, k = f, guard = 0;
+        while (k && k < m && guard++ < 240) {
+            const p = period(w, k);
+            carry += p.net - p.paid;
+            const [y, mo] = k.split('-').map(Number), n = new Date(y, mo, 1);
+            k = `${n.getFullYear()}-${pad(n.getMonth() + 1)}`;
+        }
+        const total = c.net + carry;
+        return { ...c, carry, total, baaki: total - c.paid, pct: total > 0 ? Math.min(100, c.paid / total * 100) : 0 };
+    }
+    /* ---- Phone par free alarm jaisa notification: ntfy app (ntfy.sh) ---- */
+    const tOwner = () => `${NTFY_PREFIX}-owner`;
+    const tWorker = uid => `${NTFY_PREFIX}-w${String(uid).slice(0, 10)}`;
+    function ping(topic, title, msg) {
+        try {
+            fetch('https://ntfy.sh/' + topic, { method: 'POST', body: msg, headers: { Title: title, Priority: '5', Tags: 'rotating_light' } }).catch(() => { });
+        }
+        catch (e) { /* notification fail ho to bhi app chalti rahe */ }
+    }
+    const notifCard = () => `<div class="gl" style="margin-top:12px"><h3>🔔 Phone par alarm jaisa notification (free)</h3><p class="note">1) Phone mein <b>ntfy</b> app install karein.<br>2) App mein "+" dabakar ye topic jodein:<br><b style="word-break:break-all;color:var(--gold)">${S.owner ? tOwner() : tWorker(S.user.uid)}</b><br>3) App ki settings mein is topic ko <b>Urgent</b> par rakhein, aur battery saver se ntfy ko bahar rakhein.</p><button class="b s sm" data-a="copytopic">Topic copy karein</button></div>`;
     function wa(phone, text) {
         const p = String(phone).replace(/\D/g, ''), f = p.length === 10 ? '91' + p : p, t = encodeURIComponent(text), ua = navigator.userAgent;
         if (/Android/i.test(ua))
@@ -112,8 +139,8 @@ else {
         };
     }
     /* ---- data ---- */
-    const listen = (p, cb) => {
-        const r = db.ref(p), h = r.on('value', s => {
+    const listen = (p, cb, qf) => {
+        const r = qf ? qf(db.ref(p)) : db.ref(p), h = r.on('value', s => {
             cb(s.val() || {});
             render();
         }, e => toast(errm(e), 1));
@@ -123,7 +150,7 @@ else {
         refs.forEach(([r, h]) => r.off('value', h));
         refs = [];
         Object.assign(S, {
-            user: u, owner: !!u && u.email.toLowerCase() === OWNER_EMAIL.toLowerCase(), workers: {}, pay: {}, leave: {}, req: {}, lreq: {}, task: {}, me: undefined, tab: 'home', sel: null, ready: true
+            user: u, owner: !!u && u.email.toLowerCase() === OWNER_EMAIL.toLowerCase(), workers: {}, pay: {}, leave: {}, req: {}, lreq: {}, site: {}, task: {}, me: undefined, tab: 'home', sel: null, ready: true
         });
         if (u) {
             const nodes = {
@@ -131,10 +158,12 @@ else {
             };
             if (S.owner) {
                 listen('workers', v => S.workers = v);
+                listen('sites', v => S.site = v);
                 for (const k in nodes)
                     listen(nodes[k], v => S[k] = v);
             }
             else {
+                listen('sites', v => S.site = v, r => r.orderByChild('assignedTo').equalTo(u.uid));
                 listen('workers/' + u.uid, v => {
                     S.me = v.name ? v : null;
                     S.workers = v.name ? { [u.uid]: v } : {};
@@ -156,7 +185,12 @@ else {
     const reqRow = (r, o) => `<div class="it"><div class="row"><div class="f"><b>${inr(r.amount)}</b> <span class="tag ${r.status === 'paid' ? 'g' : r.status === 'rejected' ? 'r' : ''}">${{
         pending: 'Intezaar', paid: 'Mil gaye', rejected: 'Reject'
     }[r.status]}</span>${o ? `<div class="note"><b>${esc(S.workers[r.uid]?.name || '')}</b> · ` : '<div class="note">'}${new Date(r.at).toLocaleDateString('en-IN')} · ${esc(r.note || '')}</div></div></div>${o && r.status === 'pending' ? `<div class="row" style="margin-top:8px;justify-content:flex-end"><button class="b d sm" data-a="rej" data-u="${r.uid}" data-id="${r.id}">Reject</button><button class="b sm" data-a="payreq" data-u="${r.uid}" data-id="${r.id}">Pay karein</button></div>` : ''}</div>`;
-    const sumCards = c => `<div class="grid">${stat('Mahine ki salary', inr(c.net + c.cut))}${stat(`Chhutti kati (${c.u} din)`, '− ' + inr(c.cut), c.cut ? 'bad' : '')}${stat('Ab tak mile', inr(c.paid), 'ok')}${stat(c.baaki < 0 ? 'Zyada diye' : 'Baaki', inr(Math.abs(c.baaki)), c.baaki > 0 ? 'gd' : c.baaki < 0 ? 'bad' : 'ok')}</div><div class="gl"><div class="row sp"><span class="k">Payable ${inr(c.net)} mein se mile</span><b>${Math.round(c.pct)}%</b></div><div class="bar"><i style="width:${c.pct}%"></i></div><p class="note" style="margin:10px 0 0">Kul chhutti: ${c.all} din · Ek din ka rate: ${inr(c.per)}</p></div>`;
+    const sumCards = c => `<div class="grid">${stat('Mahine ki salary', inr(c.net + c.cut))}${stat(`Chhutti kati (${c.u} din)`, '− ' + inr(c.cut), c.cut ? 'bad' : '')}${stat('Ab tak mile', inr(c.paid), 'ok')}${stat(c.baaki < 0 ? 'Zyada diye' : 'Baaki', inr(Math.abs(c.baaki)), c.baaki > 0 ? 'gd' : c.baaki < 0 ? 'bad' : 'ok')}</div><div class="gl"><div class="row sp"><span class="k">Payable ${inr(c.total)} mein se mile</span><b>${Math.round(c.pct)}%</b></div><div class="bar"><i style="width:${c.pct}%"></i></div><p class="note" style="margin:10px 0 0">${c.carry ? `Pichla baaki: <b class="${c.carry > 0 ? 'gd' : 'bad'}">${inr(Math.abs(c.carry))}${c.carry < 0 ? ' (zyada diye)' : ''}</b> · ` : ''}Kul chhutti: ${c.all} din · Ek din ka rate: ${inr(c.per)}</p></div>`;
+    const siteRow = (x, o) => `<div class="gl"><div class="row"><div class="f"><b>🏗 ${esc(x.name)}</b> <span class="tag ${x.status === 'done' ? 'g' : ''}">${x.status === 'done' ? 'Poora' : 'Chalu'}</span>
+${x.address ? `<div class="note">📍 <a class="gd" href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(x.address)}" target="_blank" rel="noopener">${esc(x.address)}</a></div>` : ''}${x.note ? `<div class="note">${esc(x.note)}</div>` : ''}
+${o ? `<div class="note">Zimmedari: <b>${x.assignedTo && S.workers[x.assignedTo] ? esc(S.workers[x.assignedTo].name) : 'Abhi kisi ko nahi saunpi'}</b></div>` : ''}</div></div>
+${o ? `<div class="row wr" style="margin-top:10px;justify-content:flex-end"><button class="b d sm" data-a="delsite" data-id="${x.id}">Delete</button><button class="b s sm" data-a="sstatus" data-id="${x.id}">${x.status === 'done' ? 'Dobara chalu' : 'Poora hua'}</button><button class="b sm" data-a="assign" data-id="${x.id}">Kisko saunpein</button></div>` : ''}</div>`;
+    const siteList = f => Object.entries(S.site).map(([id, v]) => ({ id, ...v })).filter(f).sort((a, b) => (a.status === 'done') - (b.status === 'done') || (b.at || 0) - (a.at || 0));
     const lreqRow = (r, o) => `<div class="it"><div class="row"><div class="f"><b>🗓 ${r.days} din ki chhutti</b> <span class="tag ${r.status === 'approved' ? 'g' : r.status === 'rejected' ? 'r' : ''}">${{ pending: 'Intezaar', approved: 'Manzoor', rejected: 'Reject' }[r.status]}</span>
 <div class="note">${o ? '<b>' + esc(S.workers[r.uid]?.name || '') + '</b> · ' : ''}${fd(r.date)} · ${esc(r.note || '')}</div></div></div>${o && r.status === 'pending' ? `<div class="row wr" style="margin-top:8px;justify-content:flex-end"><button class="b d sm" data-a="lrej" data-u="${r.uid}" data-id="${r.id}">Reject</button><button class="b s sm" data-a="lacc" data-u="${r.uid}" data-id="${r.id}" data-p="1">Paid chhutti</button><button class="b sm" data-a="lacc" data-u="${r.uid}" data-id="${r.id}" data-p="0">Salary kategi</button></div>` : ''}</div>`;
 
@@ -189,6 +223,13 @@ else {
             }
             return;
         }
+        const st = siteList(x => x.assignedTo === S.user.uid && x.seen === false && !seen.has(x.id))[0];
+        if (st) {
+            seen.add(st.id);
+            modal(`<h3>🏗 Nayi site aapko saunpi gayi</h3>${popRows([['Site', st.name], ['Pata', st.address || '-'], ['Note', st.note || '-']])}
+<button class="b" style="width:100%" data-a="sack" data-id="${st.id}">Samajh gaya ✓</button>`);
+            return;
+        }
         const t = un('task', S.user.uid).find(x => x.seen === false && !seen.has(x.id));
         if (!t)
             return;
@@ -201,7 +242,7 @@ else {
         const ws = Object.keys(S.workers).map(W).sort((a, b) => a.name.localeCompare(b.name)), P = pendingAll();
         const T = ws.reduce((a, w) => {
             const c = calc(w, S.month);
-            a.n += c.net;
+            a.n += c.total;
             a.p += c.paid;
             return a;
         }, { n: 0, p: 0 });
@@ -212,6 +253,9 @@ else {
   <div class="row wr" style="margin-top:12px"><button class="b sm" data-a="addpay">+ Payment</button><button class="b s sm" data-a="addleave">+ Chhutti</button><button class="b s sm" data-a="addtask" data-u="${w.uid}">+ Kaam</button><button class="b s sm" data-a="remind">WhatsApp</button><button class="b s sm" data-a="salary">Profile edit</button><button class="b d sm" data-a="delw">Delete</button></div></div>
   ${monthNav(w)}${sumCards(c)}<div class="gl"><h3>Payments</h3>${un('pay', w.uid).filter(p => inP(w, S.month, p.date)).map(p => payRow(p, 1)).join('') || '<div class="empty">Is mahine koi payment nahi.</div>'}</div>
   <div class="gl"><h3>Chhuttiyan</h3>${un('leave', w.uid).filter(l => inP(w, S.month, l.date)).map(l => leaveRow(l, 1)).join('') || '<div class="empty">Is mahine koi chhutti nahi.</div>'}</div>`;
+        }
+        else if (S.tab === 'sites') {
+            b = `<div class="row sp" style="margin-bottom:12px"><h3>Sites</h3><button class="b sm" data-a="addsite">+ Nayi site</button></div>${siteList(() => true).map(x => siteRow(x, 1)).join('') || '<div class="gl empty">Abhi koi site nahi. "+ Nayi site" se banayein.</div>'}`;
         }
         else if (S.tab === 'tasks') {
             const t = Object.keys(S.task).flatMap(u => un('task', u)).filter(x => x.date === td() || !x.done).sort((a, b) => b.date.localeCompare(a.date));
@@ -234,9 +278,9 @@ else {
                 const c = calc(w, S.month);
                 return `<div class="it" data-a="open" data-id="${w.uid}" style="cursor:pointer"><div class="row sp"><b>${esc(w.name)}</b><span class="note">${inr(c.paid)} / ${inr(c.net)}</span></div><div class="bar"><i style="width:${c.pct}%"></i></div></div>`;
             }).join('') || '<div class="empty">Abhi koi worker nahi.</div>'}</div>
-  <button class="b s" data-a="csv" style="width:100%">⬇ Is mahine ki report (CSV)</button>`;
+  <button class="b s" data-a="csv" style="width:100%">⬇ Is mahine ki report (CSV)</button>${notifCard()}`;
         }
-        return top() + `<div class="wrap">${b}</div>` + nav([['home', 'Overview'], ['team', 'Team'], ['tasks', 'Kaam'], ['req', 'Requests' + (P.length ? ' (' + P.length + ')' : '')]]);
+        return top() + `<div class="wrap">${b}</div>` + nav([['home', 'Overview'], ['team', 'Team'], ['tasks', 'Kaam'], ['sites', 'Sites'], ['req', 'Requests' + (P.length ? ' (' + P.length + ')' : '')]]);
     }
     function workerView() {
         if (S.me === undefined)
@@ -245,7 +289,10 @@ else {
             return top() + '<div class="wrap"><div class="gl empty">Aapka account abhi owner ne team mein add nahi kiya hai.</div></div>';
         const w = W(S.user.uid), c = calc(w, S.month);
         let b = '';
-        if (S.tab === 'tasks') {
+        if (S.tab === 'sites') {
+            b = `<h3 style="margin-bottom:12px">Meri Sites</h3>${siteList(x => x.assignedTo === w.uid).map(x => siteRow(x, 0)).join('') || '<div class="gl empty">Abhi aapko koi site nahi saunpi gayi.</div>'}`;
+        }
+        else if (S.tab === 'tasks') {
             const t = un('task', w.uid).sort((a, b) => b.date.localeCompare(a.date)).slice(0, 30);
             b = `<h3 style="margin-bottom:12px">Aapka kaam</h3><div class="gl">${t.map(x => taskRow(x, 0)).join('') || '<div class="empty">Abhi koi instruction nahi.</div>'}</div>`;
         }
@@ -257,9 +304,9 @@ else {
             const tt = un('task', w.uid).filter(t => t.date === td());
             b = `<div class="gl"><div style="float:right">${avatar(w, 1)}</div><div class="k">Namaste</div><h1 style="font-size:34px" class="gd">${esc(w.name)}</h1><div class="note">${esc(w.role || '')} · Salary ${inr(w.salary)}/mahina</div></div>${tt.length ? `<div class="gl"><h3>Aaj ka kaam</h3>${tt.map(x => taskRow(x, 0)).join('')}</div>` : ''}${monthNav(w)}${sumCards(c)}
   <div class="gl"><h3>Mile hue paise</h3>${un('pay', w.uid).filter(p => inP(w, S.month, p.date)).map(p => payRow(p, 0)).join('') || '<div class="empty">Is mahine abhi kuch nahi mila.</div>'}</div>
-  <div class="gl"><h3>Meri chhuttiyan</h3>${un('leave', w.uid).filter(l => inP(w, S.month, l.date)).map(l => leaveRow(l, 0)).join('') || '<div class="empty">Is mahine koi chhutti nahi.</div>'}</div>`;
+  <div class="gl"><h3>Meri chhuttiyan</h3>${un('leave', w.uid).filter(l => inP(w, S.month, l.date)).map(l => leaveRow(l, 0)).join('') || '<div class="empty">Is mahine koi chhutti nahi.</div>'}</div>${notifCard()}`;
         }
-        return top() + `<div class="wrap">${b}</div>` + nav([['home', 'Mera Hisaab'], ['tasks', 'Kaam'], ['req', 'Request']]);
+        return top() + `<div class="wrap">${b}</div>` + nav([['home', 'Mera Hisaab'], ['tasks', 'Kaam'], ['sites', 'Sites'], ['req', 'Request']]);
     }
     const loginView = () => `<div class="login">
 <div class="hero">
@@ -325,6 +372,7 @@ else {
             if (!await ask(over ? '⚠ Baaki se zyada payment' : 'Payment confirm karein', [...rowsPay(p, w), ...(over ? [['Dhyan', 'Ye salary limit se zyada hai (advance)']] : [])], 'Haan, save karein'))
                 return payForm(uid, amt, reqId);
             await db.ref('payments/' + uid).push(p);
+            ping(tWorker(uid), 'Payment mili', `${inr(p.amount)} (${p.mode}) aapke hisaab mein jude`);
             if (reqId)
                 await db.ref(`requests/${uid}/${reqId}/status`).set('paid');
             modal();
@@ -398,12 +446,13 @@ else {
             form('Profile badlein', [
                 { n: 's', l: 'Salary (₹/mahina)', t: 'number', v: w.salary },
                 { n: 'cycle', l: 'Mahina kis tareekh se shuru hota hai (1 se 28)', t: 'number', v: cyc(w) },
-                { n: 'photo', l: 'Photo ka link (https://...)', t: 'url', v: w.photo || '', r: 0 }
+                { n: 'photo', l: 'Photo ka link (https://...)', t: 'url', v: w.photo || '', r: 0 },
+                { n: 'joined', l: 'Hisaab kis tareekh se shuru (pichla baaki yahin se judta hai)', t: 'date', v: w.joined || td() }
             ], async (d) => {
                 const ph = d.photo.trim();
                 if (ph && !/^https:\/\//.test(ph))
                     return toast('Photo link https:// se shuru hona chahiye.', 1);
-                await db.ref(`workers/${S.sel}`).update({ salary: +d.s, cycle: Math.min(28, Math.max(1, Math.round(+d.cycle) || 1)), photo: ph });
+                await db.ref(`workers/${S.sel}`).update({ salary: +d.s, cycle: Math.min(28, Math.max(1, Math.round(+d.cycle) || 1)), photo: ph, joined: d.joined || w.joined || td() });
                 modal();
                 toast('Profile update ho gaya.');
             });
@@ -416,7 +465,7 @@ else {
                 n: 'salary', l: 'Salary (₹/mahina)', t: 'number'
             }, {
                 n: 'email', l: 'Login email', t: 'email'
-            }, { n: 'pass', l: 'Password (kam se kam 6)' }, { n: 'cycle', l: 'Mahina kis tareekh se shuru hota hai (1 se 28)', t: 'number', v: 1 }, { n: 'photo', l: 'Photo ka link (optional)', t: 'url', r: 0 }], async (d) => {
+            }, { n: 'pass', l: 'Password (kam se kam 6)' }, { n: 'cycle', l: 'Mahina kis tareekh se shuru hota hai (1 se 28)', t: 'number', v: 1 }, { n: 'photo', l: 'Photo ka link (optional)', t: 'url', r: 0 }, { n: 'joined', l: 'Kaam shuru hone ki tareekh', t: 'date', v: td() }], async (d) => {
             const sec = firebase.apps.find(a => a.name === 'sec') || firebase.initializeApp(cfg, 'sec');
             /* Agar pehli koshish mein Auth account ban gaya tha par worker list mein save nahi hua,
                to email "pehle se hai" aata hai. Us case mein wahi password se andar jaakar
@@ -442,7 +491,7 @@ else {
             }
             await sec.auth().signOut();
             await db.ref('workers/' + c.user.uid).set({
-                name: d.name.trim(), role: d.role.trim(), phone: d.phone.trim(), salary: +d.salary, email: d.email.trim().toLowerCase(), joined: td(), cycle: Math.min(28, Math.max(1, Math.round(+d.cycle) || 1)), photo: (d.photo || '').trim()
+                name: d.name.trim(), role: d.role.trim(), phone: d.phone.trim(), salary: +d.salary, email: d.email.trim().toLowerCase(), joined: d.joined || td(), cycle: Math.min(28, Math.max(1, Math.round(+d.cycle) || 1)), photo: (d.photo || '').trim()
             });
             modal();
             toast('Worker add ho gaya.');
@@ -453,6 +502,9 @@ else {
                 return;
             for (const n of ['payments', 'leaves', 'requests', 'leaveRequests', 'tasks'])
                 await db.ref(`${n}/${S.sel}`).remove();
+            for (const [id, x] of Object.entries(S.site))
+                if (x.assignedTo === S.sel)
+                    await db.ref('sites/' + id + '/assignedTo').set('');
             await db.ref('workers/' + S.sel).remove();
             history.back();
             toast('Worker delete ho gaya.');
@@ -477,8 +529,10 @@ else {
             const t = {
                 text: d.text.trim(), shift: d.shift, date: d.date, done: false, seen: false, at: Date.now()
             }, to = d.to === 'all' ? Object.keys(S.workers) : [d.to];
-            for (const u of to)
-                await db.ref('tasks/' + u).push(t);
+            for (const u of to) {
+            await db.ref('tasks/' + u).push(t);
+            ping(tWorker(u), 'Naya kaam', `${d.shift}: ${t.text}`);
+        }
             modal();
             toast('Kaam de diya gaya.');
         }, 'Bhejein'),
@@ -488,7 +542,50 @@ else {
             if (!await ask('Request reject karein?', [['Worker', W(d.u).name], ['Amount', inr(r.amount)], ['Wajah', r.note || '-']], 'Haan, reject karein', 1))
                 return;
             await db.ref(`requests/${d.u}/${d.id}/status`).set('rejected');
+            ping(tWorker(d.u), 'Paison ki request reject', `${inr(r.amount)} ki request abhi manzoor nahi hui`);
             toast('Request reject ho gayi.');
+        },
+        addsite: () => form('Nayi site', [{ n: 'name', l: 'Site ka naam' }, { n: 'address', l: 'Pata / location', r: 0 }, { n: 'note', l: 'Note (optional)', t: 'area', r: 0 },
+            { n: 'to', l: 'Kisko saunpni hai', o: [['', 'Abhi kisi ko nahi'], ...Object.keys(S.workers).map(u => [u, S.workers[u].name])] }], async (d) => {
+            const x = { name: d.name.trim(), address: d.address.trim(), note: d.note.trim(), status: 'chalu', assignedTo: d.to || '', seen: false, at: Date.now() };
+            await db.ref('sites').push(x);
+            if (x.assignedTo)
+                ping(tWorker(x.assignedTo), 'Nayi site', `${x.name} ${x.address}`);
+            modal();
+            toast('Site save ho gayi.');
+        }, 'Site banayein'),
+        assign: d => {
+            const x = S.site[d.id];
+            form('Site kisko saunpein?', [{ n: 'to', l: x.name, o: [['', 'Kisi ko nahi'], ...Object.keys(S.workers).map(u => [u, S.workers[u].name])], v: x.assignedTo || '' }], async (f) => {
+                if (f.to === (x.assignedTo || ''))
+                    return modal();
+                if (!await ask('Site saunpein?', [['Site', x.name], ['Kisko', f.to ? W(f.to).name : 'Kisi ko nahi']], 'Haan, saunpein'))
+                    return;
+                await db.ref('sites/' + d.id).update({ assignedTo: f.to, seen: false });
+                if (f.to)
+                    ping(tWorker(f.to), 'Nayi site', `${x.name} ${x.address || ''}`);
+                modal();
+                toast('Site saunp di gayi.');
+            }, 'Aage badhein');
+        },
+        async sstatus(d) {
+            await db.ref('sites/' + d.id + '/status').set(S.site[d.id].status === 'done' ? 'chalu' : 'done');
+        },
+        async delsite(d) {
+            if (!await ask('Site delete karein?', [['Site', S.site[d.id].name]], 'Haan, delete karein', 1))
+                return;
+            await db.ref('sites/' + d.id).remove();
+            toast('Site delete ho gayi.');
+        },
+        sack: d => { db.ref(`sites/${d.id}/seen`).set(true); modal(); },
+        copytopic: async () => {
+            try {
+                await navigator.clipboard.writeText(S.owner ? tOwner() : tWorker(S.user.uid));
+                toast('Topic copy ho gaya.');
+            }
+            catch (e) {
+                toast('Copy nahi hua, topic haath se likh lein.', 1);
+            }
         },
         mklreq: () => form('Chhutti ki request', [{ n: 'date', l: 'Kis tareekh se', t: 'date', v: td() }, { n: 'days', l: 'Kitne din (aadha din = 0.5)', t: 'number', v: 1 }, { n: 'note', l: 'Wajah', t: 'area' }], async (d) => {
             const r = { date: d.date, days: +d.days, note: d.note.trim(), status: 'pending', at: Date.now() };
@@ -497,6 +594,7 @@ else {
             if (!await ask('Owner ko chhutti ki request bhejein?', [['Tareekh', fd(r.date)], ['Din', r.days], ['Wajah', r.note || '-']], 'Haan, bhejein'))
                 return;
             await db.ref('leaveRequests/' + S.user.uid).push(r);
+            ping(tOwner(), 'Chhutti ki request', `${S.me.name}: ${r.days} din (${fd(r.date)}) - ${r.note || ''}`);
             modal();
             toast('Chhutti ki request owner ko bhej di gayi.');
         }, 'Aage badhein'),
@@ -505,6 +603,7 @@ else {
             if (!await ask('Chhutti reject karein?', [['Worker', W(d.u).name], ['Tareekh', fd(r.date)], ['Din', r.days]], 'Haan, reject karein', 1))
                 return;
             await db.ref(`leaveRequests/${d.u}/${d.id}/status`).set('rejected');
+            ping(tWorker(d.u), 'Chhutti reject', `${fd(r.date)} ki chhutti manzoor nahi hui`);
             toast('Chhutti reject ho gayi.');
         },
         async lacc(d) {
@@ -513,6 +612,7 @@ else {
                 return;
             await db.ref('leaves/' + d.u).push({ date: r.date, days: r.days, paid, note: r.note || 'Request se manzoor' });
             await db.ref(`leaveRequests/${d.u}/${d.id}/status`).set('approved');
+            ping(tWorker(d.u), 'Chhutti manzoor', `${r.days} din ki chhutti manzoor (${fd(r.date)})`);
             toast('Chhutti manzoor ho gayi.');
         },
         mkreq: () => form('Paison ki zaroorat', [{
@@ -528,21 +628,22 @@ else {
             if (!await ask('Owner ko request bhejein?', [['Amount', inr(r.amount)], ['Wajah', r.note || '-']], 'Haan, bhejein'))
                 return;
             await db.ref('requests/' + S.user.uid).push(r);
+            ping(tOwner(), 'Paison ki request', `${S.me.name}: ${inr(r.amount)} - ${r.note || ''}`);
             modal();
             toast('Request owner ko bhej di gayi.');
         }, 'Aage badhein'),
         remind: () => {
             const w = W(S.sel), c = calc(w, S.month);
-            wa(w.phone, `${w.name} ji, ${mname(S.month)} ka hisaab:\nSalary: ${inr(w.salary)}\nChhutti ki katauti: ${inr(c.cut)}\nAb tak diye: ${inr(c.paid)}\nBaaki: ${inr(c.baaki)}\n\nApna poora hisaab dekhne ke liye link par click karke login karein:\n${site()}`);
+            wa(w.phone, `${w.name} ji, ${mname(S.month)} ka hisaab:\nSalary: ${inr(w.salary)}\nChhutti ki katauti: ${inr(c.cut)}\nPichla baaki: ${inr(c.carry)}\nAb tak diye: ${inr(c.paid)}\nBaaki: ${inr(c.baaki)}\n\nApna poora hisaab dekhne ke liye link par click karke login karein:\n${site()}`);
         },
         wowner: () => {
             const w = W(S.user.uid), c = calc(w, S.month);
-            wa(OWNER_PHONE, `Sir, main ${w.name}. ${mname(S.month)} ka mera baaki ${inr(c.baaki)} hai (net ${inr(c.net)}, mile ${inr(c.paid)}). Kripya payment kar dijiye.\n\nHisaab: ${site()}`);
+            wa(OWNER_PHONE, `Sir, main ${w.name}. ${mname(S.month)} ka mera baaki ${inr(c.baaki)} hai (kul payable ${inr(c.total)}, mile ${inr(c.paid)}). Kripya payment kar dijiye.\n\nHisaab: ${site()}`);
         },
         csv: () => {
-            const q = v => '"' + String(v ?? '').replace(/"/g, '""') + '"', rows = [['Worker', 'Salary', 'Katauti', 'Payable', 'Diye', 'Baaki'], ...Object.keys(S.workers).map(W).map(w => {
+            const q = v => '"' + String(v ?? '').replace(/"/g, '""') + '"', rows = [['Worker', 'Salary', 'Katauti', 'Pichla baaki', 'Kul payable', 'Diye', 'Baaki'], ...Object.keys(S.workers).map(W).map(w => {
                     const c = calc(w, S.month);
-                    return [w.name, w.salary, c.cut, c.net, c.paid, c.baaki];
+                    return [w.name, w.salary, c.cut, c.carry, c.total, c.paid, c.baaki];
                 })];
             const a = document.createElement('a');
             a.href = URL.createObjectURL(new Blob(['\ufeff' + rows.map(r => r.map(q).join(',')).join('\n')], { type: 'text/csv' }));
