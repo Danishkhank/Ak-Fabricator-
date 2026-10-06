@@ -1,0 +1,410 @@
+const $ = s => document.querySelector(s);
+const esc = t => String(t ?? '').replace(/[&<>"']/g, c => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+}[c]));
+const inr = n => new Intl.NumberFormat('en-IN', {
+    style: 'currency', currency: 'INR', maximumFractionDigits: 0
+}).format(Math.round(n || 0));
+const td = () => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
+const fd = s => s ? new Date(s + 'T00:00').toLocaleDateString('en-IN', {
+    day: '2-digit', month: 'short', year: 'numeric'
+}) : '-';
+const mname = m => new Date(m + '-01T00:00').toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
+function toast(m, e) {
+    const t = $('#toast');
+    t.textContent = m;
+    t.className = e ? 'e' : '';
+    t.hidden = false;
+    clearTimeout(toast.i);
+    toast.i = setTimeout(() => t.hidden = true, 3600);
+}
+const errm = e => ({
+    'auth/invalid-credential': 'Email ya password galat hai.', 'auth/email-already-in-use': 'Ye email pehle se hai.', 'auth/weak-password': 'Password kam se kam 6 akshar ka rakhein.', 'auth/network-request-failed': 'Internet check karein.'
+}[e.code] || (e.code === 'PERMISSION_DENIED' ? 'Permission nahi hai (rules check karein).' : e.message));
+const S = {
+    user: null, owner: false, ready: false, workers: {}, pay: {}, leave: {}, req: {}, task: {}, me: undefined, tab: 'home', sel: null, month: td().slice(0, 7)
+};
+if (cfg.apiKey.startsWith('PASTE')) {
+    document.getElementById('app').innerHTML = '<div class="login gl"><h2 class="gd">Setup baaki hai</h2><p class="note">index.html ke upar SETTINGS mein apna Firebase config, owner email aur phone daaliye.</p></div>';
+}
+else {
+    firebase.initializeApp(cfg);
+    const auth = firebase.auth(), db = firebase.database();
+    let refs = [];
+    const un = (node, uid) => Object.entries(S[node][uid] || {}).map(([id, v]) => ({
+        id, uid, ...v
+    })).sort((a, b) => String(b.date || b.at).localeCompare(String(a.date || a.at)));
+    const W = uid => ({ uid, ...S.workers[uid] });
+    function calc(w, m) {
+        const [y, mo] = m.split('-').map(Number), dim = new Date(y, mo, 0).getDate(), per = w.salary / dim;
+        const L = un('leave', w.uid).filter(l => l.date.startsWith(m)), all = L.reduce((a, l) => a + l.days, 0), u = L.filter(l => !l.paid).reduce((a, l) => a + l.days, 0);
+        const cut = Math.round(per * u), net = w.salary - cut, paid = un('pay', w.uid).filter(p => p.date.startsWith(m)).reduce((a, p) => a + p.amount, 0);
+        return {
+            per, all, u, cut, net, paid, baaki: net - paid, pct: net > 0 ? Math.min(100, paid / net * 100) : 0
+        };
+    }
+    function wa(phone, text) {
+        const p = String(phone).replace(/\D/g, ''), f = p.length === 10 ? '91' + p : p, t = encodeURIComponent(text), ua = navigator.userAgent;
+        if (/Android/i.test(ua))
+            location.href = `intent://send/?phone=${f}&text=${t}#Intent;scheme=whatsapp;package=com.whatsapp;S.browser_fallback_url=${encodeURIComponent(`https://wa.me/${f}?text=${t}`)};end`;
+        else if (/iPhone|iPad/i.test(ua))
+            location.href = `whatsapp://send?phone=${f}&text=${t}`;
+        else
+            window.open(`https://wa.me/${f}?text=${t}`);
+    }
+    const site = () => location.origin + location.pathname;
+    /* ---- modal helpers ---- */
+    const modal = h => $('#modal').innerHTML = h ? `<div class="ov"><div class="mod">${h}</div></div>` : '';
+    const ask = (t, rows, ok, danger) => new Promise(r => {
+        modal(`<h3>${esc(t)}</h3><table class="dt">${rows.map(x => `<tr><td class="note">${esc(x[0])}</td><td>${esc(x[1])}</td></tr>`).join('')}</table><div class="row"><button class="b s f" id="cn">Wapas</button><button class="b ${danger ? 'd' : ''} f" id="cy">${esc(ok)}</button></div>`);
+        $('#cn').onclick = () => {
+            modal();
+            r(0);
+        };
+        $('#cy').onclick = () => {
+            modal();
+            r(1);
+        };
+    });
+    function form(title, fs, go, btn = 'Save') {
+        modal(`<form id="fm"><h3>${title}</h3>${fs.map(f => `<label>${f.l}</label>` + (f.o ? `<select name="${f.n}">${f.o.map(o => `<option value="${o[0]}" ${o[0] == f.v ? 'selected' : ''}>${o[1]}</option>`).join('')}</select>` : f.t === 'area' ? `<textarea name="${f.n}" rows="3">${esc(f.v || '')}</textarea>` : `<input name="${f.n}" type="${f.t || 'text'}" step="any" value="${esc(f.v ?? '')}" ${f.r === 0 ? '' : 'required'}>`)).join('')}
+<div class="row" style="margin-top:18px"><button type="button" class="b s f" data-a="close">Band</button><button class="b f">${btn}</button></div></form>`);
+        $('#fm').onsubmit = async (e) => {
+            e.preventDefault();
+            const b = e.target.querySelector('button:not([type])');
+            b.disabled = true;
+            try {
+                await go(Object.fromEntries(new FormData(e.target)));
+            }
+            catch (x) {
+                toast(errm(x), 1);
+            }
+            b.disabled = false;
+        };
+    }
+    /* ---- data ---- */
+    const listen = (p, cb) => {
+        const r = db.ref(p), h = r.on('value', s => {
+            cb(s.val() || {});
+            render();
+        }, e => toast(errm(e), 1));
+        refs.push([r, h]);
+    };
+    auth.onAuthStateChanged(u => {
+        refs.forEach(([r, h]) => r.off('value', h));
+        refs = [];
+        Object.assign(S, {
+            user: u, owner: !!u && u.email.toLowerCase() === OWNER_EMAIL.toLowerCase(), workers: {}, pay: {}, leave: {}, req: {}, task: {}, me: undefined, tab: 'home', sel: null, ready: true
+        });
+        if (u) {
+            const nodes = {
+                pay: 'payments', leave: 'leaves', req: 'requests', task: 'tasks'
+            };
+            if (S.owner) {
+                listen('workers', v => S.workers = v);
+                for (const k in nodes)
+                    listen(nodes[k], v => S[k] = v);
+            }
+            else {
+                listen('workers/' + u.uid, v => {
+                    S.me = v.name ? v : null;
+                    S.workers = v.name ? { [u.uid]: v } : {};
+                });
+                for (const k in nodes)
+                    listen(`${nodes[k]}/${u.uid}`, v => S[k] = { [u.uid]: v });
+            }
+        }
+        render();
+    });
+    /* ---- views ---- */
+    const nav = (items) => `<div class="nav">${items.map(i => `<button class="${S.tab === i[0] && !S.sel ? 'on' : ''}" data-a="tab" data-id="${i[0]}">${i[1]}</button>`).join('')}</div>`;
+    const top = (sub = '') => `<div class="top"><h2>AK Fabricator</h2><a class="b s sm" href="${SHOP_MAP}" target="_blank" rel="noopener" style="text-decoration:none">📍 Shop</a><button class="b s sm" data-a="out">Logout</button></div>`;
+    const monthNav = () => `<div class="mn"><button class="b s sm" data-a="mo" data-id="-1">‹</button><h3 class="gd">${mname(S.month)}</h3><button class="b s sm" data-a="mo" data-id="1">›</button></div>`;
+    const stat = (k, v, c = '') => `<div class="gl"><div class="k">${k}</div><div class="big ${c}">${v}</div></div>`;
+    const taskRow = (t, owner) => `<div class="it row"><div class="f"><b>${esc(t.text)}</b><div class="note">${esc(t.shift)} · ${fd(t.date)}${owner ? ' · ' + esc(S.workers[t.uid]?.name || '') : ''}</div></div>${owner ? `<span class="tag ${t.done ? 'g' : ''}">${t.done ? 'Ho gaya' : 'Baaki'}</span><button class="b d sm" data-a="del" data-n="tasks" data-u="${t.uid}" data-id="${t.id}">✕</button>` : `<button class="b ${t.done ? 's' : ''} sm" data-a="done" data-u="${t.uid}" data-id="${t.id}">${t.done ? '✓ Done' : 'Done karein'}</button>`}</div>`;
+    const payRow = (p, o) => `<div class="it row"><div class="f"><b>${inr(p.amount)}</b> <span class="tag">${esc(p.mode)}</span><div class="note">${fd(p.date)}${p.note ? ' · ' + esc(p.note) : ''}</div></div>${o ? `<button class="b d sm" data-a="del" data-n="payments" data-u="${p.uid}" data-id="${p.id}">✕</button>` : ''}</div>`;
+    const leaveRow = (l, o) => `<div class="it row"><div class="f"><b>${l.days} din</b> <span class="tag ${l.paid ? 'g' : 'r'}">${l.paid ? 'Paid chhutti' : 'Salary kategi'}</span><div class="note">${fd(l.date)}${l.note ? ' · ' + esc(l.note) : ''}</div></div>${o ? `<button class="b d sm" data-a="del" data-n="leaves" data-u="${l.uid}" data-id="${l.id}">✕</button>` : ''}</div>`;
+    const reqRow = (r, o) => `<div class="it"><div class="row"><div class="f"><b>${inr(r.amount)}</b> <span class="tag ${r.status === 'paid' ? 'g' : r.status === 'rejected' ? 'r' : ''}">${{
+        pending: 'Intezaar', paid: 'Mil gaye', rejected: 'Reject'
+    }[r.status]}</span>${o ? `<div class="note"><b>${esc(S.workers[r.uid]?.name || '')}</b> · ` : '<div class="note">'}${new Date(r.at).toLocaleDateString('en-IN')} · ${esc(r.note || '')}</div></div></div>${o && r.status === 'pending' ? `<div class="row" style="margin-top:8px;justify-content:flex-end"><button class="b d sm" data-a="rej" data-u="${r.uid}" data-id="${r.id}">Reject</button><button class="b sm" data-a="payreq" data-u="${r.uid}" data-id="${r.id}">Pay karein</button></div>` : ''}</div>`;
+    const sumCards = c => `<div class="grid">${stat('Mahine ki salary', inr(c.net + c.cut))}${stat(`Chhutti kati (${c.u} din)`, '− ' + inr(c.cut), c.cut ? 'bad' : '')}${stat('Ab tak mile', inr(c.paid), 'ok')}${stat(c.baaki < 0 ? 'Zyada diye' : 'Baaki', inr(Math.abs(c.baaki)), c.baaki > 0 ? 'gd' : c.baaki < 0 ? 'bad' : 'ok')}</div><div class="gl"><div class="row sp"><span class="k">Payable ${inr(c.net)} mein se mile</span><b>${Math.round(c.pct)}%</b></div><div class="bar"><i style="width:${c.pct}%"></i></div><p class="note" style="margin:10px 0 0">Kul chhutti: ${c.all} din · Ek din ka rate: ${inr(c.per)}</p></div>`;
+    function ownerView() {
+        const ws = Object.keys(S.workers).map(W).sort((a, b) => a.name.localeCompare(b.name)), P = Object.keys(S.req).flatMap(u => un('req', u)).filter(r => r.status === 'pending');
+        const T = ws.reduce((a, w) => {
+            const c = calc(w, S.month);
+            a.n += c.net;
+            a.p += c.paid;
+            return a;
+        }, { n: 0, p: 0 });
+        let b = '';
+        if (S.sel && S.workers[S.sel]) {
+            const w = W(S.sel), c = calc(w, S.month);
+            b = `<button class="b s sm" data-a="back">← Wapas</button><div class="gl" style="margin-top:12px"><div class="row"><div class="av">${esc(w.name[0])}</div><div class="f"><h3>${esc(w.name)}</h3><div class="note">${esc(w.role || '')} · ${esc(w.phone || '')} · Salary ${inr(w.salary)}/mahina</div></div></div>
+  <div class="row wr" style="margin-top:12px"><button class="b sm" data-a="addpay">+ Payment</button><button class="b s sm" data-a="addleave">+ Chhutti</button><button class="b s sm" data-a="addtask" data-u="${w.uid}">+ Kaam</button><button class="b s sm" data-a="remind">WhatsApp</button><button class="b s sm" data-a="salary">Salary badlein</button><button class="b d sm" data-a="delw">Delete</button></div></div>
+  ${monthNav()}${sumCards(c)}<div class="gl"><h3>Payments</h3>${un('pay', w.uid).filter(p => p.date.startsWith(S.month)).map(p => payRow(p, 1)).join('') || '<div class="empty">Is mahine koi payment nahi.</div>'}</div>
+  <div class="gl"><h3>Chhuttiyan</h3>${un('leave', w.uid).filter(l => l.date.startsWith(S.month)).map(l => leaveRow(l, 1)).join('') || '<div class="empty">Is mahine koi chhutti nahi.</div>'}</div>`;
+        }
+        else if (S.tab === 'tasks') {
+            const t = Object.keys(S.task).flatMap(u => un('task', u)).filter(x => x.date === td() || !x.done).sort((a, b) => b.date.localeCompare(a.date));
+            b = `<div class="row sp" style="margin-bottom:12px"><h3>Kaam / Instructions</h3><button class="b sm" data-a="addtask">+ Naya kaam</button></div><div class="gl">${t.map(x => taskRow(x, 1)).join('') || '<div class="empty">Aaj ka koi kaam nahi diya.</div>'}</div>`;
+        }
+        else if (S.tab === 'req') {
+            const r = Object.keys(S.req).flatMap(u => un('req', u)).sort((a, b) => b.at - a.at);
+            b = `<h3 style="margin-bottom:12px">Paison ki requests</h3><div class="gl">${r.map(x => reqRow(x, 1)).join('') || '<div class="empty">Koi request nahi.</div>'}</div>`;
+        }
+        else if (S.tab === 'team') {
+            b = `<div class="row sp" style="margin-bottom:12px"><h3>Team (${ws.length})</h3><button class="b sm" data-a="addw">+ Worker</button></div>${ws.map(w => {
+                const c = calc(w, S.month);
+                return `<div class="gl" data-a="open" data-id="${w.uid}" style="cursor:pointer"><div class="row"><div class="av">${esc(w.name[0])}</div><div class="f"><b>${esc(w.name)}</b><div class="note">${esc(w.role || '')} · ${inr(w.salary)}</div></div><div style="text-align:right"><b class="${c.baaki > 0 ? 'gd' : 'ok'}">${inr(c.baaki)}</b><div class="k">baaki</div></div></div><div class="bar"><i style="width:${c.pct}%"></i></div></div>`;
+            }).join('') || '<div class="gl empty">Pehle worker add karein.</div>'}`;
+        }
+        else {
+            b = `${P.length ? `<div class="gl" data-a="tab" data-id="req" style="cursor:pointer;border-color:var(--amb)"><b style="color:var(--amb)">🔔 ${P.length} worker ko paison ki zaroorat hai</b><div class="note">Dekhne ke liye dabayein</div></div>` : ''}${monthNav()}
+  <div class="grid">${stat('Team', ws.length)}${stat('Kul payable', inr(T.n))}${stat('Diye gaye', inr(T.p), 'ok')}${stat('Baaki', inr(T.n - T.p), 'gd')}</div>
+  <div class="gl"><h3 style="margin-bottom:6px">Team ka hisaab</h3>${ws.map(w => {
+                const c = calc(w, S.month);
+                return `<div class="it" data-a="open" data-id="${w.uid}" style="cursor:pointer"><div class="row sp"><b>${esc(w.name)}</b><span class="note">${inr(c.paid)} / ${inr(c.net)}</span></div><div class="bar"><i style="width:${c.pct}%"></i></div></div>`;
+            }).join('') || '<div class="empty">Abhi koi worker nahi.</div>'}</div>
+  <button class="b s" data-a="csv" style="width:100%">⬇ Is mahine ki report (CSV)</button>`;
+        }
+        return top() + `<div class="wrap">${b}</div>` + nav([['home', 'Overview'], ['team', 'Team'], ['tasks', 'Kaam'], ['req', 'Requests' + (P.length ? ' (' + P.length + ')' : '')]]);
+    }
+    function workerView() {
+        if (S.me === undefined)
+            return top() + '<div class="empty">Load ho raha hai...</div>';
+        if (!S.me)
+            return top() + '<div class="wrap"><div class="gl empty">Aapka account abhi owner ne team mein add nahi kiya hai.</div></div>';
+        const w = W(S.user.uid), c = calc(w, S.month);
+        let b = '';
+        if (S.tab === 'tasks') {
+            const t = un('task', w.uid).sort((a, b) => b.date.localeCompare(a.date)).slice(0, 30);
+            b = `<h3 style="margin-bottom:12px">Aapka kaam</h3><div class="gl">${t.map(x => taskRow(x, 0)).join('') || '<div class="empty">Abhi koi instruction nahi.</div>'}</div>`;
+        }
+        else if (S.tab === 'req') {
+            b = `<div class="row sp" style="margin-bottom:12px"><h3>Paison ki request</h3><button class="b sm" data-a="mkreq">+ Nayi</button></div><div class="gl">${un('req', w.uid).sort((a, b) => b.at - a.at).map(x => reqRow(x, 0)).join('') || '<div class="empty">Koi request nahi.</div>'}</div><button class="b s" data-a="wowner" style="width:100%">WhatsApp par owner ko reminder</button>`;
+        }
+        else {
+            const tt = un('task', w.uid).filter(t => t.date === td());
+            b = `<div class="gl"><div class="k">Namaste</div><h1 style="font-size:34px" class="gd">${esc(w.name)}</h1><div class="note">${esc(w.role || '')} · Salary ${inr(w.salary)}/mahina</div></div>${tt.length ? `<div class="gl"><h3>Aaj ka kaam</h3>${tt.map(x => taskRow(x, 0)).join('')}</div>` : ''}${monthNav()}${sumCards(c)}
+  <div class="gl"><h3>Mile hue paise</h3>${un('pay', w.uid).filter(p => p.date.startsWith(S.month)).map(p => payRow(p, 0)).join('') || '<div class="empty">Is mahine abhi kuch nahi mila.</div>'}</div>
+  <div class="gl"><h3>Meri chhuttiyan</h3>${un('leave', w.uid).filter(l => l.date.startsWith(S.month)).map(l => leaveRow(l, 0)).join('') || '<div class="empty">Is mahine koi chhutti nahi.</div>'}</div>`;
+        }
+        return top() + `<div class="wrap">${b}</div>` + nav([['home', 'Mera Hisaab'], ['tasks', 'Kaam'], ['req', 'Request']]);
+    }
+    const loginView = () => `<form class="login" id="lg"><div class="orb"></div><h1>AK<br>Fabricator</h1><p class="note" style="margin:10px 0 20px">Ghanshyam Chauhan · Team Ledger<br>Hisaab, kaam aur bharosa ek jagah.</p><div class="gl"><label style="margin:0">Email</label><input name="e" type="email" required autocomplete="username"><label>Password</label><input name="p" type="password" required autocomplete="current-password"><button class="b" style="width:100%;margin-top:18px">Login</button><button type="button" class="b s" style="width:100%;margin-top:10px" data-a="forgot">Password bhool gaye?</button></div><a class="note" href="${SHOP_MAP}" target="_blank" rel="noopener">📍 Shop ka location dekhein</a></form>`;
+    function render() {
+        if (!S.ready)
+            return;
+        $('#app').innerHTML = !S.user ? loginView() : S.owner ? ownerView() : workerView();
+        const l = $('#lg');
+        if (l)
+            l.onsubmit = async (e) => {
+                e.preventDefault();
+                try {
+                    await auth.signInWithEmailAndPassword(l.e.value.trim(), l.p.value);
+                }
+                catch (x) {
+                    toast(errm(x), 1);
+                }
+            };
+    }
+    /* ---- actions ---- */
+    const rowsPay = (p, w) => [['Worker', w.name], ['Amount', inr(p.amount)], ['Tareekh', fd(p.date)], ['Tareeka', p.mode], ['Note', p.note || '-']];
+    function payForm(uid, amt, reqId) {
+        const w = W(uid), c = calc(w, S.month);
+        form('Payment add karein', [{
+                n: 'amount', l: `Amount (₹) · is mahine baaki ${inr(c.baaki)}`, t: 'number', v: amt || ''
+            }, {
+                n: 'date', l: 'Tareekh', t: 'date', v: td()
+            }, {
+                n: 'mode', l: 'Kaise diye', o: [['Cash', 'Cash'], ['UPI', 'UPI'], ['Bank', 'Bank transfer']]
+            }, {
+                n: 'note', l: 'Note (optional)', v: '', r: 0
+            }], async (d) => {
+            const p = {
+                amount: +d.amount, date: d.date, mode: d.mode, note: d.note.trim(), at: Date.now()
+            };
+            if (!(p.amount > 0))
+                return toast('Sahi amount likhein.', 1);
+            const over = p.amount > Math.max(0, calc(w, d.date.slice(0, 7)).baaki);
+            if (!await ask(over ? '⚠ Baaki se zyada payment' : 'Payment confirm karein', [...rowsPay(p, w), ...(over ? [['Dhyan', 'Ye salary limit se zyada hai (advance)']] : [])], 'Haan, save karein'))
+                return payForm(uid, amt, reqId);
+            await db.ref('payments/' + uid).push(p);
+            if (reqId)
+                await db.ref(`requests/${uid}/${reqId}/status`).set('paid');
+            modal();
+            toast('Payment save ho gayi.');
+        });
+    }
+    const A = {
+        out: () => auth.signOut(), close: () => modal(), back: () => {
+            S.sel = null;
+            render();
+        }, open: d => {
+            S.sel = d.id;
+            render();
+        }, tab: d => {
+            S.tab = d.id;
+            S.sel = null;
+            render();
+        },
+        mo: d => {
+            const [y, m] = S.month.split('-').map(Number), n = new Date(y, m - 1 + +d.id, 1);
+            S.month = `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, '0')}`;
+            render();
+        },
+        async forgot() {
+            const e = $('#lg').e.value.trim();
+            if (!e)
+                return toast('Pehle email likhein.', 1);
+            await auth.sendPasswordResetEmail(e);
+            toast('Reset link email par bhej diya.');
+        },
+        addpay: () => payForm(S.sel), payreq: d => payForm(d.u, S.req[d.u][d.id].amount, d.id),
+        addleave: () => {
+            const w = W(S.sel);
+            form('Chhutti add karein', [{
+                    n: 'date', l: 'Tareekh', t: 'date', v: td()
+                }, {
+                    n: 'days', l: 'Kitne din (aadha din = 0.5)', t: 'number', v: 1
+                }, {
+                    n: 'paid', l: 'Salary katni hai?', o: [['0', 'Haan, salary kategi (bina paid)'], ['1', 'Nahi, paid chhutti']]
+                }, {
+                    n: 'note', l: 'Wajah (optional)', v: '', r: 0
+                }], async (d) => {
+                const l = {
+                    date: d.date, days: +d.days, paid: d.paid === '1', note: d.note.trim()
+                };
+                if (!(l.days > 0))
+                    return toast('Din sahi likhein.', 1);
+                if (!await ask('Chhutti confirm karein', [['Worker', w.name], ['Tareekh', fd(l.date)], ['Din', l.days], ['Salary kategi', l.paid ? 'Nahi' : 'Haan ≈ ' + inr(calc(w, d.date.slice(0, 7)).per * l.days)]], 'Haan, add karein'))
+                    return;
+                await db.ref('leaves/' + S.sel).push(l);
+                modal();
+                toast('Chhutti add ho gayi.');
+            });
+        },
+        salary: () => {
+            const w = W(S.sel);
+            form('Monthly salary', [{
+                    n: 's', l: 'Salary (₹/mahina)', t: 'number', v: w.salary
+                }], async (d) => {
+                await db.ref(`workers/${S.sel}/salary`).set(+d.s);
+                modal();
+                toast('Salary update ho gayi.');
+            });
+        },
+        addw: () => form('Naya worker', [{ n: 'name', l: 'Naam' }, {
+                n: 'role', l: 'Kaam / Role', r: 0
+            }, {
+                n: 'phone', l: 'Phone', t: 'tel', r: 0
+            }, {
+                n: 'salary', l: 'Salary (₹/mahina)', t: 'number'
+            }, {
+                n: 'email', l: 'Login email', t: 'email'
+            }, { n: 'pass', l: 'Password (kam se kam 6)' }], async (d) => {
+            const sec = firebase.apps.find(a => a.name === 'sec') || firebase.initializeApp(cfg, 'sec');
+            const c = await sec.auth().createUserWithEmailAndPassword(d.email.trim(), d.pass);
+            await sec.auth().signOut();
+            await db.ref('workers/' + c.user.uid).set({
+                name: d.name.trim(), role: d.role.trim(), phone: d.phone.trim(), salary: +d.salary, email: d.email.trim().toLowerCase(), joined: td()
+            });
+            modal();
+            toast('Worker add ho gaya.');
+        }, 'Worker banayein'),
+        async delw() {
+            const w = W(S.sel);
+            if (!await ask('Worker delete karein?', [['Naam', w.name], ['Dhyan', 'Iska poora hisaab delete hoga']], 'Haan, delete karein', 1))
+                return;
+            for (const n of ['payments', 'leaves', 'requests', 'tasks'])
+                await db.ref(`${n}/${S.sel}`).remove();
+            await db.ref('workers/' + S.sel).remove();
+            S.sel = null;
+            toast('Worker delete ho gaya.');
+        },
+        async del(d) {
+            if (!await ask('Delete karein?', [['Cheez', {
+                        payments: 'Payment', leaves: 'Chhutti', tasks: 'Kaam'
+                    }[d.n]]], 'Haan, delete karein', 1))
+                return;
+            await db.ref(`${d.n}/${d.u}/${d.id}`).remove();
+            toast('Delete ho gaya.');
+        },
+        addtask: d => form('Kaam / Instruction', [{
+                n: 'to', l: 'Kisko', o: [['all', 'Sabko'], ...Object.keys(S.workers).map(u => [u, S.workers[u].name])], v: d.u || 'all'
+            }, {
+                n: 'shift', l: 'Kab', o: [['Subah aate hi', 'Subah aate hi'], ['Dopahar', 'Dopahar'], ['Shaam', 'Shaam'], ['Band karte waqt', 'Band karte waqt']]
+            }, {
+                n: 'date', l: 'Tareekh', t: 'date', v: td()
+            }, {
+                n: 'text', l: 'Kya karna hai', t: 'area'
+            }], async (d) => {
+            const t = {
+                text: d.text.trim(), shift: d.shift, date: d.date, done: false, at: Date.now()
+            }, to = d.to === 'all' ? Object.keys(S.workers) : [d.to];
+            for (const u of to)
+                await db.ref('tasks/' + u).push(t);
+            modal();
+            toast('Kaam de diya gaya.');
+        }, 'Bhejein'),
+        done: d => db.ref(`tasks/${d.u}/${d.id}/done`).set(!S.task[d.u][d.id].done),
+        async rej(d) {
+            const r = S.req[d.u][d.id];
+            if (!await ask('Request reject karein?', [['Worker', W(d.u).name], ['Amount', inr(r.amount)], ['Wajah', r.note || '-']], 'Haan, reject karein', 1))
+                return;
+            await db.ref(`requests/${d.u}/${d.id}/status`).set('rejected');
+            toast('Request reject ho gayi.');
+        },
+        mkreq: () => form('Paison ki zaroorat', [{
+                n: 'amount', l: 'Kitne paise chahiye (₹)', t: 'number'
+            }, {
+                n: 'note', l: 'Wajah', t: 'area'
+            }], async (d) => {
+            const r = {
+                amount: +d.amount, note: d.note.trim(), status: 'pending', at: Date.now()
+            };
+            if (!(r.amount > 0))
+                return toast('Sahi amount likhein.', 1);
+            if (!await ask('Owner ko request bhejein?', [['Amount', inr(r.amount)], ['Wajah', r.note || '-']], 'Haan, bhejein'))
+                return;
+            await db.ref('requests/' + S.user.uid).push(r);
+            modal();
+            toast('Request owner ko bhej di gayi.');
+        }, 'Aage badhein'),
+        remind: () => {
+            const w = W(S.sel), c = calc(w, S.month);
+            wa(w.phone, `${w.name} ji, ${mname(S.month)} ka hisaab:\nSalary: ${inr(w.salary)}\nChhutti ki katauti: ${inr(c.cut)}\nAb tak diye: ${inr(c.paid)}\nBaaki: ${inr(c.baaki)}\n\nApna poora hisaab dekhne ke liye link par click karke login karein:\n${site()}`);
+        },
+        wowner: () => {
+            const w = W(S.user.uid), c = calc(w, S.month);
+            wa(OWNER_PHONE, `Sir, main ${w.name}. ${mname(S.month)} ka mera baaki ${inr(c.baaki)} hai (net ${inr(c.net)}, mile ${inr(c.paid)}). Kripya payment kar dijiye.\n\nHisaab: ${site()}`);
+        },
+        csv: () => {
+            const q = v => '"' + String(v ?? '').replace(/"/g, '""') + '"', rows = [['Worker', 'Salary', 'Katauti', 'Payable', 'Diye', 'Baaki'], ...Object.keys(S.workers).map(W).map(w => {
+                    const c = calc(w, S.month);
+                    return [w.name, w.salary, c.cut, c.net, c.paid, c.baaki];
+                })];
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(new Blob(['\ufeff' + rows.map(r => r.map(q).join(',')).join('\n')], { type: 'text/csv' }));
+            a.download = `report-${S.month}.csv`;
+            a.click();
+        }
+    };
+    document.addEventListener('click', async (ev) => {
+        const b = ev.target.closest('[data-a]');
+        if (!b || !A[b.dataset.a])
+            return;
+        if (b.tagName === 'A')
+            return;
+        try {
+            await A[b.dataset.a](b.dataset);
+        }
+        catch (e) {
+            toast(errm(e), 1);
+        }
+    });
+}
+
