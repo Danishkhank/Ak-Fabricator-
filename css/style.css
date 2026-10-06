@@ -388,3 +388,12 @@ body {
 .av { position: relative; overflow: hidden; }
 .av img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
 .av.lg { width: 68px; height: 68px; border-radius: 20px; font-size: 30px; }
+
+/* ---- Site team checkboxes + login photos ---- */
+.chk { display: flex; align-items: center; gap: 10px; margin-top: 8px; color: var(--iv); font-size: 15px; }
+.chk input { width: auto; margin: 0; }
+.slides { position: relative; height: 220px; border-radius: 22px; overflow: hidden; border: 1px solid var(--ln); margin-bottom: 14px; }
+.slides img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity 1s; }
+.slides img.on { opacity: 1; }
+.slides::after { content: ''; position: absolute; inset: 0; background: linear-gradient(transparent 50%, rgba(10, 11, 16, .85)); }
+.login.has-photos .bp { display: none; }
