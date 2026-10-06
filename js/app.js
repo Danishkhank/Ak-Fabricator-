@@ -90,11 +90,11 @@ else {
     const tWorker = uid => `${NTFY_PREFIX}-w${String(uid).slice(0, 10)}`;
     function ping(topic, title, msg) {
         try {
-            fetch('https://ntfy.sh/' + topic, { method: 'POST', body: msg, headers: { Title: title, Priority: '5', Tags: 'rotating_light' } }).catch(() => { });
+            fetch('https://ntfy.sh/' + topic, { method: 'POST', body: msg, headers: { Title: title, Priority: '5', Tags: 'rotating_light', Click: site() } }).catch(() => { });
         }
         catch (e) { /* notification fail ho to bhi app chalti rahe */ }
     }
-    const notifCard = () => `<div class="gl" style="margin-top:12px"><h3>🔔 Phone par alarm jaisa notification (free)</h3><p class="note">1) Phone mein <b>ntfy</b> app install karein.<br>2) App mein "+" dabakar ye topic jodein:<br><b style="word-break:break-all;color:var(--gold)">${S.owner ? tOwner() : tWorker(S.user.uid)}</b><br>3) App ki settings mein is topic ko <b>Urgent</b> par rakhein, aur battery saver se ntfy ko bahar rakhein.</p><button class="b s sm" data-a="copytopic">Topic copy karein</button></div>`;
+    const notifCard = () => `<div class="gl" style="margin-top:12px"><h3>🔔 Phone par alarm jaisa notification (free)</h3><p class="note">1) Phone mein <b>ntfy</b> app install karein.<br>2) App mein "+" dabakar ye topic jodein:<br><b style="word-break:break-all;color:var(--gold)">${S.owner ? tOwner() : tWorker(S.user.uid)}</b><br>3) App ki settings mein is topic ko <b>Urgent</b> par rakhein, aur battery saver se ntfy ko bahar rakhein.</p><button class="b s sm" data-a="copytopic">Topic copy karein</button> <button class="b sm" data-a="pingtest">🔔 Test notification bhejein</button></div>`;
     function wa(phone, text) {
         const p = String(phone).replace(/\D/g, ''), f = p.length === 10 ? '91' + p : p, t = encodeURIComponent(text), ua = navigator.userAgent;
         if (/Android/i.test(ua))
@@ -108,8 +108,10 @@ else {
     /* ---- modal helpers ---- */
     const modal = h => {
         $('#modal').innerHTML = h ? `<div class="ov"><div class="mod">${h}</div></div>` : '';
-        if (!h)
+        if (!h) {
+            stopRing();
             setTimeout(checkPopups, 500);
+        }
     };
     const ask = (t, rows, ok, danger) => new Promise(r => {
         modal(`<h3>${esc(t)}</h3><table class="dt">${rows.map(x => `<tr><td class="note">${esc(x[0])}</td><td>${esc(x[1])}</td></tr>`).join('')}</table><div class="row"><button class="b s f" id="cn">Wapas</button><button class="b ${danger ? 'd' : ''} f" id="cy">${esc(ok)}</button></div>`);
@@ -203,6 +205,50 @@ ${o ? `<div class="row wr" style="margin-top:10px;justify-content:flex-end"><but
     /* ---- Popups: owner ko urgent request, worker ko naya kaam ---- */
     const seen = new Set();
     const popRows = a => `<table class="dt">${a.map(x => `<tr><td class="note">${x[0]}</td><td>${esc(x[1])}</td></tr>`).join('')}</table>`;
+    /* ---- Popup aane par ring jaisi awaaz + vibration (website khuli ho tab) ---- */
+    let AC = null, ringT = null;
+    document.addEventListener('click', () => {
+        try {
+            if (!AC)
+                AC = new (window.AudioContext || window.webkitAudioContext)();
+            if (AC.state === 'suspended')
+                AC.resume();
+        }
+        catch (e) { }
+    });
+    function beep() {
+        try {
+            const o = AC.createOscillator(), g = AC.createGain();
+            o.type = 'square';
+            o.frequency.value = 880;
+            g.gain.value = 0.25;
+            o.connect(g);
+            g.connect(AC.destination);
+            o.start();
+            o.stop(AC.currentTime + 0.22);
+        }
+        catch (e) { }
+    }
+    function stopRing() {
+        if (ringT) {
+            clearInterval(ringT);
+            ringT = null;
+        }
+    }
+    function startRing() {
+        stopRing();
+        try {
+            navigator.vibrate && navigator.vibrate([400, 200, 400, 200, 400]);
+        }
+        catch (e) { }
+        if (!AC || AC.state !== 'running')
+            return;
+        let n = 0;
+        const go = () => { beep(); setTimeout(beep, 300); setTimeout(beep, 600); };
+        go();
+        ringT = setInterval(() => { go(); if (++n >= 12) stopRing(); }, 1800);
+    }
+    const popup = h => { modal(h); startRing(); };
     function checkPopups() {
         if (!S.user || $('#modal').innerHTML)
             return;
@@ -213,11 +259,11 @@ ${o ? `<div class="row wr" style="margin-top:10px;justify-content:flex-end"><but
             seen.add(p.id);
             const w = W(p.uid), ids = `data-u="${p.uid}" data-id="${p.id}"`;
             if (p.kind === 'pay') {
-                modal(`<h3>💰 Paison ki request</h3>${popRows([['Worker', w.name], ['Amount', inr(p.amount)], ['Wajah', p.note || '-'], ['Is mahine baaki', inr(calc(w, S.month).baaki)]])}
+                popup(`<h3>💰 Paison ki request</h3>${popRows([['Worker', w.name], ['Amount', inr(p.amount)], ['Wajah', p.note || '-'], ['Is mahine baaki', inr(calc(w, S.month).baaki)]])}
 <div class="row wr"><button class="b s f" data-a="snooze">Baad mein</button><button class="b d f" data-a="rej" ${ids}>Reject</button><button class="b f" data-a="payreq" ${ids}>Pay karein</button></div>`);
             }
             else {
-                modal(`<h3>🗓 Chhutti ki request</h3>${popRows([['Worker', w.name], ['Tareekh', fd(p.date)], ['Din', p.days], ['Wajah', p.note || '-']])}
+                popup(`<h3>🗓 Chhutti ki request</h3>${popRows([['Worker', w.name], ['Tareekh', fd(p.date)], ['Din', p.days], ['Wajah', p.note || '-']])}
 <div class="row wr"><button class="b s f" data-a="snooze">Baad mein</button><button class="b d f" data-a="lrej" ${ids}>Reject</button></div>
 <div class="row wr" style="margin-top:8px"><button class="b s f" data-a="lacc" ${ids} data-p="1">Paid chhutti</button><button class="b f" data-a="lacc" ${ids} data-p="0">Salary kategi</button></div>`);
             }
@@ -226,7 +272,7 @@ ${o ? `<div class="row wr" style="margin-top:10px;justify-content:flex-end"><but
         const st = siteList(x => x.assignedTo === S.user.uid && x.seen === false && !seen.has(x.id))[0];
         if (st) {
             seen.add(st.id);
-            modal(`<h3>🏗 Nayi site aapko saunpi gayi</h3>${popRows([['Site', st.name], ['Pata', st.address || '-'], ['Note', st.note || '-']])}
+            popup(`<h3>🏗 Nayi site aapko saunpi gayi</h3>${popRows([['Site', st.name], ['Pata', st.address || '-'], ['Note', st.note || '-']])}
 <button class="b" style="width:100%" data-a="sack" data-id="${st.id}">Samajh gaya ✓</button>`);
             return;
         }
@@ -234,7 +280,7 @@ ${o ? `<div class="row wr" style="margin-top:10px;justify-content:flex-end"><but
         if (!t)
             return;
         seen.add(t.id);
-        modal(`<h3>📌 Naya kaam mila hai</h3><p class="note">${esc(t.shift)} · ${fd(t.date)}</p><p style="font-size:18px;word-break:break-word">${esc(t.text)}</p>
+        popup(`<h3>📌 Naya kaam mila hai</h3><p class="note">${esc(t.shift)} · ${fd(t.date)}</p><p style="font-size:18px;word-break:break-word">${esc(t.text)}</p>
 <button class="b" style="width:100%" data-a="ack" data-u="${t.uid}" data-id="${t.id}">Samajh gaya ✓</button>`);
     }
 
@@ -578,6 +624,10 @@ ${o ? `<div class="row wr" style="margin-top:10px;justify-content:flex-end"><but
             toast('Site delete ho gayi.');
         },
         sack: d => { db.ref(`sites/${d.id}/seen`).set(true); modal(); },
+        pingtest: () => {
+            ping(S.owner ? tOwner() : tWorker(S.user.uid), 'Test notification', 'Agar ye awaaz ke saath aaya to setup sahi hai.');
+            toast('Test bhej diya. Phone par 5-10 second mein aana chahiye.');
+        },
         copytopic: async () => {
             try {
                 await navigator.clipboard.writeText(S.owner ? tOwner() : tWorker(S.user.uid));
