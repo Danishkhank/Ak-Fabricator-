@@ -46,7 +46,10 @@ else {
         const [y, mo] = m.split('-').map(Number), n = new Date(y, mo, 1);
         return [`${y}-${pad(mo)}-${pad(cyc(w))}`, `${n.getFullYear()}-${pad(n.getMonth() + 1)}-${pad(cyc(w))}`];
     }
-    const inP = (w, m, date) => { const [a, b] = range(w, m); return date >= a && date < b; };
+    /* "Hisaab shuru tareekh" (w.joined): is tareekh se pehle ki entries ginti mein nahi aati */
+    const startOf = w => /^\d{4}-\d{2}-\d{2}$/.test(w.joined || '') ? w.joined : '';
+    const inP = (w, m, date) => { const [a, b] = range(w, m), st = startOf(w); return date >= a && date < b && (!st || date >= st); };
+    const daysBetween = (a, b) => Math.round((new Date(b + 'T00:00') - new Date(a + 'T00:00')) / 864e5);
     /* Koi tareekh kis cycle-mahine mein aati hai (3 Oct, cycle 5 => September wala mahina) */
     function pkey(w, date) {
         const [y, mo, d] = date.split('-').map(Number), k = new Date(y, mo - 1 - (d < cyc(w) ? 1 : 0), 1);
@@ -62,23 +65,28 @@ else {
     const avatar = (w, big) => `<div class="av ${big ? 'lg' : ''}">${/^https:\/\//.test(w.photo || '') ? `<img src="${esc(w.photo)}" alt="" referrerpolicy="no-referrer" onerror="this.remove()">` : ''}<span>${esc((w.name || '?')[0])}</span></div>`;
     /* Ek cycle-mahine ka hisaab (is mahine ki salary, katauti aur diye gaye paise) */
     function period(w, m) {
-        const per = Number(w.salary || 0) / DAYS_IN_MONTH;
-        const L = un('leave', w.uid).filter(l => inP(w, m, l.date)), all = L.reduce((a, l) => a + l.days, 0), u = L.filter(l => !l.paid).reduce((a, l) => a + l.days, 0);
-        const cut = Math.round(per * u), net = Number(w.salary || 0) - cut, paid = un('pay', w.uid).filter(p => inP(w, m, p.date)).reduce((a, p) => a + Number(p.amount || 0), 0);
-        return { per, all, u, cut, net, paid };
+        const [a, b] = range(w, m), st = startOf(w), sal = Number(w.salary || 0), per = sal / DAYS_IN_MONTH;
+        /* Hisaab shuru hone se pehle ka mahina: kuch nahi ginna */
+        if (st && b <= st)
+            return { per, all: 0, u: 0, cut: 0, net: 0, paid: 0, due: 0 };
+        /* Beech mahine se shuru ho to pehle mahine ki salary dinon ke hisaab se (30 din = poori salary) */
+        const due = st && st > a ? Math.round(sal * Math.min(DAYS_IN_MONTH, daysBetween(st, b)) / DAYS_IN_MONTH) : sal;
+        const L = un('leave', w.uid).filter(l => inP(w, m, l.date)), all = L.reduce((x, l) => x + l.days, 0), u = L.filter(l => !l.paid).reduce((x, l) => x + l.days, 0);
+        const cut = Math.round(per * u), net = due - cut, paid = un('pay', w.uid).filter(x => inP(w, m, x.date)).reduce((x, y) => x + Number(y.amount || 0), 0);
+        return { per, all, u, cut, net, paid, due };
     }
-    /* Worker ka pehla mahina: kaam shuru hone ki tareekh ya sabse purani entry */
+    /* Worker ka pehla mahina = hisaab shuru tareekh wala. Tareekh khali ho to koi pichla baaki nahi judta */
     function firstKey(w) {
-        const ds = [w.joined, ...un('pay', w.uid).map(x => x.date), ...un('leave', w.uid).map(x => x.date)].filter(x => /^\d{4}-\d{2}-\d{2}$/.test(x || '')).sort();
-        return ds.length ? pkey(w, ds[0]) : null;
+        const st = startOf(w);
+        return st ? pkey(w, st) : null;
     }
-    /* Pichle sab mahino ka baaki (carry forward) + is mahine ka hisaab */
+    /* Pichle sab mahino ka baaki (carry forward) + shuruaati baaki (opening) + is mahine ka hisaab */
     function calc(w, m) {
         const c = period(w, m), f = firstKey(w);
-        let carry = 0, k = f, guard = 0;
+        let carry = f && f <= m ? Number(w.opening || 0) : 0, k = f, guard = 0;
         while (k && k < m && guard++ < 240) {
-            const p = period(w, k);
-            carry += p.net - p.paid;
+            const q = period(w, k);
+            carry += q.net - q.paid;
             const [y, mo] = k.split('-').map(Number), n = new Date(y, mo, 1);
             k = `${n.getFullYear()}-${pad(n.getMonth() + 1)}`;
         }
@@ -449,6 +457,8 @@ ${slidesHtml()}
             };
             if (!(p.amount > 0))
                 return toast('Sahi amount likhein.', 1);
+            if (startOf(w) && p.date < startOf(w))
+                return toast(`Ye tareekh hisaab shuru hone (${fd(startOf(w))}) se pehle ki hai. Profile edit mein shuru tareekh badlein ya shuruaati baaki mein jod dein.`, 1);
             const over = p.amount > Math.max(0, calc(w, pkey(w, d.date)).baaki);
             if (!await ask(over ? '⚠ Baaki se zyada payment' : 'Payment confirm karein', [...rowsPay(p, w), ...(over ? [['Dhyan', 'Ye salary limit se zyada hai (advance)']] : [])], 'Haan, save karein'))
                 return payForm(uid, amt, reqId);
@@ -457,7 +467,7 @@ ${slidesHtml()}
             if (reqId)
                 await db.ref(`requests/${uid}/${reqId}/status`).set('paid');
             modal();
-            toast('Payment save ho gayi.');
+            toast(pkey(w, p.date) === S.month ? 'Payment save ho gayi.' : 'Payment save hui, par ye ' + mname(pkey(w, p.date)) + ' ke hisaab mein judi.');
         });
     }
     /* ---- Back button: phone ka back sirf pichli screen par jaaye, poori site se bahar nahi ---- */
@@ -516,6 +526,8 @@ ${slidesHtml()}
                 };
                 if (!(l.days > 0))
                     return toast('Din sahi likhein.', 1);
+                if (startOf(w) && l.date < startOf(w))
+                    return toast(`Ye tareekh hisaab shuru hone (${fd(startOf(w))}) se pehle ki hai.`, 1);
                 if (!await ask('Chhutti confirm karein', [['Worker', w.name], ['Tareekh', fd(l.date)], ['Din', l.days], ['Salary kategi', l.paid ? 'Nahi' : 'Haan ≈ ' + inr(calc(w, pkey(w, d.date)).per * l.days)]], 'Haan, add karein'))
                     return;
                 await db.ref('leaves/' + S.sel).push(l);
@@ -529,12 +541,13 @@ ${slidesHtml()}
                 { n: 's', l: 'Salary (₹/mahina)', t: 'number', v: w.salary },
                 { n: 'cycle', l: 'Mahina kis tareekh se shuru hota hai (1 se 28)', t: 'number', v: cyc(w) },
                 { n: 'photo', l: 'Photo ka link (https://...)', t: 'url', v: w.photo || '', r: 0 },
-                { n: 'joined', l: 'Hisaab kis tareekh se shuru (pichla baaki yahin se judta hai)', t: 'date', v: w.joined || td() }
+                { n: 'joined', l: 'Hisaab kis tareekh se shuru (is se pehle ki entries nahi ginti)', t: 'date', v: w.joined || '', r: 0 },
+                { n: 'opening', l: 'Us tareekh tak ka baaki (₹): + matlab worker ko dena hai, − matlab zyada diya hua', t: 'number', v: w.opening || 0, r: 0 }
             ], async (d) => {
                 const ph = d.photo.trim();
                 if (ph && !/^https:\/\//.test(ph))
                     return toast('Photo link https:// se shuru hona chahiye.', 1);
-                await db.ref(`workers/${S.sel}`).update({ salary: +d.s, cycle: Math.min(28, Math.max(1, Math.round(+d.cycle) || 1)), photo: ph, joined: d.joined || w.joined || td() });
+                await db.ref(`workers/${S.sel}`).update({ salary: +d.s, cycle: Math.min(28, Math.max(1, Math.round(+d.cycle) || 1)), photo: ph, joined: d.joined || '', opening: Number(d.opening) || 0 });
                 modal();
                 toast('Profile update ho gaya.');
             });
@@ -547,7 +560,7 @@ ${slidesHtml()}
                 n: 'salary', l: 'Salary (₹/mahina)', t: 'number'
             }, {
                 n: 'email', l: 'Login email', t: 'email'
-            }, { n: 'pass', l: 'Password (kam se kam 6)' }, { n: 'cycle', l: 'Mahina kis tareekh se shuru hota hai (1 se 28)', t: 'number', v: 1 }, { n: 'photo', l: 'Photo ka link (optional)', t: 'url', r: 0 }, { n: 'joined', l: 'Kaam shuru hone ki tareekh', t: 'date', v: td() }], async (d) => {
+            }, { n: 'pass', l: 'Password (kam se kam 6)' }, { n: 'cycle', l: 'Mahina kis tareekh se shuru hota hai (1 se 28)', t: 'number', v: 1 }, { n: 'photo', l: 'Photo ka link (optional)', t: 'url', r: 0 }, { n: 'joined', l: 'Hisaab kis tareekh se shuru', t: 'date', v: td() }, { n: 'opening', l: 'Us tareekh tak ka baaki (₹), naya worker ho to 0', t: 'number', v: 0, r: 0 }], async (d) => {
             const sec = firebase.apps.find(a => a.name === 'sec') || firebase.initializeApp(cfg, 'sec');
             /* Agar pehli koshish mein Auth account ban gaya tha par worker list mein save nahi hua,
                to email "pehle se hai" aata hai. Us case mein wahi password se andar jaakar
@@ -573,7 +586,7 @@ ${slidesHtml()}
             }
             await sec.auth().signOut();
             await db.ref('workers/' + c.user.uid).set({
-                name: d.name.trim(), role: d.role.trim(), phone: d.phone.trim(), salary: +d.salary, email: d.email.trim().toLowerCase(), joined: d.joined || td(), cycle: Math.min(28, Math.max(1, Math.round(+d.cycle) || 1)), photo: (d.photo || '').trim()
+                name: d.name.trim(), role: d.role.trim(), phone: d.phone.trim(), salary: +d.salary, email: d.email.trim().toLowerCase(), joined: d.joined || td(), opening: Number(d.opening) || 0, cycle: Math.min(28, Math.max(1, Math.round(+d.cycle) || 1)), photo: (d.photo || '').trim()
             });
             modal();
             toast('Worker add ho gaya.');
